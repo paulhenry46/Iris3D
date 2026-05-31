@@ -8,7 +8,7 @@ class EventVisualizer:
     """
     Renders high-energy physics collision events in a highly fluid,
     GPU-accelerated 3D canvas using PyVista (VTK), featuring interactive
-    picking tooltips and a passive geo-physical detector environment.
+    picking tooltips, realistic magnetic field bending, and style-coded tracks.
     """
     def __init__(self, theme: str = "dark"):
         self.transformer = CoordinateTransformer()
@@ -80,9 +80,9 @@ class EventVisualizer:
             pickable=False
         )
 
-    def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01):
+    def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8):
         """
-        Generates and displays the fluid 3D interactive scene with detector environment.
+        Generates and displays the fluid 3D interactive scene with helical track bending.
         """
         # 1. Initialize the high-performance PyVista Plotter
         plotter = pv.Plotter(window_size=[1024, 768], title=f"Iris3D - Run {event.metadata.run_id} Event {event.metadata.event_id}")
@@ -99,42 +99,86 @@ class EventVisualizer:
         # Dictionary to store metadata strings associated with custom geometric IDs
         self.tooltip_dict = {}
         
-        # 4. Process and Vectorize Particle Tracks
-        spatial_data = self.transformer.extract_event_arrays(event, p_scale=p_scale, j_scale=j_scale)
-        p_vectors = spatial_data["particle_vectors"]
+        # 4. Process Particle Tracks (Helical vs Straight)
+        spatial_data = self.transformer.extract_event_arrays(event, p_scale=p_scale, j_scale=j_scale, B_field=B_field)
         p_meta = spatial_data["particle_metadata"]
+        p_paths = spatial_data["particle_paths"]
         
-        for i in range(len(p_vectors)):
-            endpoint = p_vectors[i]
+        # 4. Traitement et Style des Traces
+        # 4. Traitement et Style des Traces
+        for i in range(len(p_paths)):
+            points = p_paths[i]
             metadata = p_meta[i]
-            source_particle = event.particles[i]
             
-            track_line = pv.Line((0.0, 0.0, 0.0), endpoint)
-            color = self._get_particle_color(metadata.get("pid", 0))
-            p_name = metadata.get("name") if metadata.get("name") else f"Unassigned (PID {metadata.get('pid', 0)})"
+            # --- EXTRACT INFO SAFELY FOR HOVER TOOLTIP ---
+            # Au lieu d'accéder à un objet particule complet, on pioche directement
+            # dans les listes de métadonnées et de coordonnées qu'on a unifiées
+            p_name = metadata.get("name", f"Track {i}")
+            p_pid = metadata.get("pid", 0)
+            p_charge = metadata.get("charge", 0)
             
+            # On récupère le pT, l'eta et le phi d'origine depuis les vecteurs 
+            # de core.py ou depuis les variables normalisées
+            p_pt = float(spatial_data["particle_vectors"][i, 0] / p_scale) if p_scale != 0 else 0.0
+            # Pour l'affichage précis dans la boîte de dialogue, on reconstruit les valeurs nominales
+            # ou on utilise un fallback propre si ce n'est pas une dataclass standard
+            try:
+                source_particle = event.particles[i]
+                pt_val = source_particle.pt
+                eta_val = source_particle.eta
+                phi_val = source_particle.phi
+            except (TypeError, KeyError, IndexError, AttributeError):
+                # Fallback sécurisé si c'est une structure colonnaire Awkward Record
+                try:
+                    pt_val = float(event["particles"]["pt"][i])
+                    eta_val = float(event["particles"]["eta"][i])
+                    phi_val = float(event["particles"]["phi"][i])
+                except Exception:
+                    pt_val = 0.0
+                    eta_val = 0.0
+                    phi_val = 0.0
+            
+            # Géométrie de la trace
+            if p_charge != 0:
+                # Particules chargées : Courbe continue (Spline)
+                track_mesh = pv.Spline(points, len(points))
+            else:
+                # Particules neutres : Ligne droite (PolyData)
+                track_mesh = pv.PolyData(points)
+                
+                if p_pid == 22:  # Photons -> Pointillés physiques (Dashed)
+                    lines_connectivity = []
+                    for idx in range(0, len(points) - 1, 2):
+                        lines_connectivity.extend([2, idx, idx + 1])
+                    track_mesh.lines = np.array(lines_connectivity, dtype=np.int32)
+                else:  # Hadrons Neutres -> Ligne droite continue
+                    cells = np.hstack([[len(points)], np.arange(len(points))])
+                    track_mesh.lines = cells
+            
+            color = self._get_particle_color(p_pid)
             mesh_id = f"particle_{i}"
+            
+            # Création du texte dynamique sans dépendances rigides envers le type de l'event
             hover_text = (
                 f"Particle Track #{i}\n"
                 f"Identity : {p_name}\n"
-                f"pT       : {source_particle.pt:.2f} GeV\n"
-                f"eta      : {source_particle.eta:.2f}\n"
-                f"phi      : {source_particle.phi:.2f} rad\n"
-                f"Charge   : {source_particle.charge}"
+                f"pT       : {pt_val:.2f} GeV\n"
+                f"eta      : {eta_val:.2f}\n"
+                f"phi      : {phi_val:.2f} rad\n"
+                f"Charge   : {p_charge}"
             )
             self.tooltip_dict[mesh_id] = hover_text
+            track_mesh.field_data["mesh_id"] = [mesh_id]
             
-            track_line.field_data["mesh_id"] = [mesh_id]
-            
-            if source_particle.charge == 0:
-                plotter.add_mesh(
-                    track_line, color=color, line_width=1, opacity=0.5, name=mesh_id
-                )
+            # Affichage final
+            if p_charge == 0:
+                if p_pid == 22:
+                    plotter.add_mesh(track_mesh, color=color, line_width=2.5, opacity=0.9, name=mesh_id)
+                else:
+                    plotter.add_mesh(track_mesh, color=color, line_width=1, opacity=0.5, name=mesh_id)
             else:
-                plotter.add_mesh(
-                    track_line, color=color, line_width=4, opacity=1.0, name=mesh_id
-                )
-            
+                plotter.add_mesh(track_mesh, color=color, line_width=4, opacity=1.0, name=mesh_id)
+        # 5. Process and Render Jet Cones
         # 5. Process and Render Jet Cones
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
             direction = np.array(jet_geo["unit_direction"])
@@ -146,14 +190,33 @@ class EventVisualizer:
                 center=cone_center, direction=-direction, height=length, radius=radius, resolution=30
             )
             
-            source_jet = event.jets[i]
+            # --- EXTRACT JET INFO SAFELY FOR HOVER TOOLTIP ---
+            try:
+                source_jet = event.jets[i]
+                j_energy = source_jet.energy
+                j_eta = source_jet.eta
+                j_phi = source_jet.phi
+                j_dr = source_jet.delta_r
+            except (TypeError, KeyError, IndexError, AttributeError):
+                # Fallback sécurisé pour le format colonnaire Awkward Record
+                try:
+                    j_energy = float(event["jets"]["energy"][i])
+                    j_eta = float(event["jets"]["eta"][i])
+                    j_phi = float(event["jets"]["phi"][i])
+                    j_dr = float(event["jets"]["delta_r"][i])
+                except Exception:
+                    j_energy = 0.0
+                    j_eta = 0.0
+                    j_phi = 0.0
+                    j_dr = 0.4  # Valeur par défaut standard en physique des particules (Anti-kT)
+            
             mesh_id = f"jet_{i}"
             jet_hover_text = (
                 f"Reconstructed Jet #{i}\n"
-                f"Energy : {source_jet.energy:.2f} GeV\n"
-                f"eta    : {source_jet.eta:.2f}\n"
-                f"phi    : {source_jet.phi:.2f} rad\n"
-                f"delta_R: {source_jet.delta_r:.2f}"
+                f"Energy : {j_energy:.2f} GeV\n"
+                f"eta    : {j_eta:.2f}\n"
+                f"phi    : {j_phi:.2f} rad\n"
+                f"delta_R: {j_dr:.2f}"
             )
             self.tooltip_dict[mesh_id] = jet_hover_text
             
@@ -163,8 +226,7 @@ class EventVisualizer:
                 jet_cone, color="orange", opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id
             )
 
-        # FIX 2: Relocate the custom tracker box to "upper_right" to isolate it completely
-        # from PyVista's built-in upper_left system hints!
+        # Affichage de la bannière en "upper_left" pour éviter la superposition de texte
         plotter.add_text(
             "Click an object to inspect...", 
             position="upper_left", 
@@ -195,8 +257,7 @@ class EventVisualizer:
         ]
         plotter.camera.zoom(0.8)
         
-        # FIX 1: Activate picking AFTER the renderer pipeline has established 
-        # camera positions to completely eliminate the VTK InteractorStyle console warning.
+        # Initialisation propre du mesh picking après la configuration de la caméra
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         
         plotter.show()
