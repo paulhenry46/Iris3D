@@ -19,10 +19,10 @@ def _to_iterable(array_or_list: Any) -> np.ndarray:
     if type(array_or_list).__module__.startswith("awkward"):
         import awkward as ak
         
-        # Specialized check: Awkward stores textual values (like particle names)
-        # as character offsets. Direct conversion to NumPy breaks; we must
-        # force a clean unrolling into a Python list first.
-        if ak.types.is_string_type(ak.type(array_or_list)):
+        # Check if the high-level representation contains string properties
+        # This replaces the broken ak.types.is_string_type check safely
+        type_str = str(ak.type(array_or_list))
+        if "string" in type_str or "char" in type_str:
             return np.array(ak.to_list(array_or_list), dtype=object)
             
         # Fallback to standard native binary serialization to flat NumPy
