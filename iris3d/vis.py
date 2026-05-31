@@ -85,11 +85,23 @@ class EventVisualizer:
         Generates and displays the fluid 3D interactive scene with helical track bending
         and Missing Transverse Energy (MET) balancing.
         """
-        # 1. Initialize the high-performance PyVista Plotter
+        # 1. Initialize the high-performance PyVista Plotter with Aesthetic Adjustments
+        # 1. Initialize the high-performance PyVista Plotter with Aesthetic Adjustments
         plotter = pv.Plotter(window_size=[1024, 768], title=f"Iris3D - Run {event.metadata.run_id} Event {event.metadata.event_id}")
-        plotter.add_axes()
-        plotter.show_grid(color="gray")
         
+        # --- CHANTIER 1 : CONFIGURATION VISUELLE CORRIGÉE ---
+        plotter.set_background(color="#0f172a")               # Fond Midnight Blue
+        plotter.add_axes()
+        
+        # CORRECTION : On retire 'opacity' et on met une couleur subtile qui s'estompe d'elle-même (#1e293b -> #334155)
+        plotter.show_grid(color="#273549")                     
+        
+        # On garde le lissage anti-aliasing (très utile pour lisser les trajectoires helicoïdales)
+        plotter.enable_anti_aliasing("msaa", multi_samples=4)  
+        
+        # SUPPRESSION de plotter.enable_eye_dome_lighting() pour un rendu technique plat et net
+        # ---------------------------------------------------
+
         # 2. Render Passive Detector Reference Subsystems
         self._add_detector_geometry(plotter)
         
@@ -213,10 +225,9 @@ class EventVisualizer:
         # --- 5.5. Process and Render Missing Transverse Energy (MET) ---
         met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
         
-        if met_data["pt"] > 0.5:  # Seuil physique d'activation
+        if met_data["pt"] > 0.5:
             met_vector = np.array(met_data["vector"])
             
-            # Échantillonnage discret pour générer un maillage pointillé propre
             met_points = np.linspace(np.array([0.0, 0.0, 0.0]), met_vector, 30)
             met_mesh = pv.PolyData(met_points)
             
@@ -225,7 +236,6 @@ class EventVisualizer:
                 met_lines.extend([2, idx, idx + 1])
             met_mesh.lines = np.array(met_lines, dtype=np.int32)
             
-            # Cône directionnel pour la tête de la flèche
             met_direction = met_vector / np.linalg.norm(met_vector)
             met_cone_tip = pv.Cone(
                 center=met_vector,
@@ -246,7 +256,6 @@ class EventVisualizer:
             met_mesh.field_data["mesh_id"] = [mesh_id]
             met_cone_tip.field_data["mesh_id"] = [mesh_id]
             
-            # Affichage de l'indicateur rouge fluo standardisé
             plotter.add_mesh(met_mesh, color="red", line_width=5, opacity=1.0, name=f"{mesh_id}_line")
             plotter.add_mesh(met_cone_tip, color="red", opacity=1.0, name=f"{mesh_id}_tip")
 
@@ -281,7 +290,6 @@ class EventVisualizer:
         ]
         plotter.camera.zoom(0.8)
         
-        # Initialisation propre du mesh picking après la configuration de la caméra
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         
         plotter.show()
