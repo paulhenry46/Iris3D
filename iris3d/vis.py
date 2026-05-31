@@ -13,6 +13,11 @@ class EventVisualizer:
     def __init__(self, theme: str = "dark"):
         self.transformer = CoordinateTransformer()
         self.current_selected_id = None  # Tracker pour l'objet actuellement sélectionné
+        self.calorimeter_outer_radius = 2.8
+        self.detector_ecal_r=1.75      # Bord externe exact de ton calorimètre de vis.py
+        self.detector_muon_r=4.0
+        self.tracker_radius = 1.5
+        self.tracker_length = 5.0
         
         if theme == "dark":
             pv.set_plot_theme("dark")
@@ -35,14 +40,12 @@ class EventVisualizer:
         Draws passive reference structures centered at (0,0,0) and aligned 
         along the Z-axis (beam pipe line) to provide physical scale.
         """
-        tracker_radius = 1.5
-        tracker_length = 5.0
         
         tracker = pv.Cylinder(
             center=(0.0, 0.0, 0.0),
             direction=(0.0, 0.0, 1.0),
-            radius=tracker_radius,
-            height=tracker_length,
+            radius=self.tracker_radius,
+            height=self.tracker_length,
             resolution=50
         )
         
@@ -58,13 +61,12 @@ class EventVisualizer:
             pickable=False
         )
 
-        calorimeter_outer_radius = 2.8
         calorimeter_length = 6.0
         
         calorimeter = pv.Cylinder(
             center=(0.0, 0.0, 0.0),
             direction=(0.0, 0.0, 1.0),
-            radius=calorimeter_outer_radius,
+            radius=self.calorimeter_outer_radius,
             height=calorimeter_length,
             resolution=50
         )
@@ -102,7 +104,16 @@ class EventVisualizer:
         self.tooltip_dict = {}
         self.current_selected_id = None
         
-        spatial_data = self.transformer.extract_event_arrays(event, p_scale=p_scale, j_scale=j_scale, B_field=B_field)
+        spatial_data = self.transformer.extract_event_arrays(
+            event, 
+            p_scale=p_scale, 
+            j_scale=j_scale, 
+            B_field=B_field,
+            detector_ecal_r=self.detector_ecal_r,         # Moitié du calorimètre (Ex: entre le tracker 1.5 et la fin 2.8)
+            detector_hcal_r=self.calorimeter_outer_radius,         # Bord externe exact de ton calorimètre de vis.py
+            detector_muon_r=self.detector_muon_r          # Zone libre externe dédiée aux muons
+        )
+        
         p_meta = spatial_data["particle_metadata"]
         p_paths = spatial_data["particle_paths"]
         
@@ -229,7 +240,7 @@ class EventVisualizer:
             
             met_direction = met_vector / np.linalg.norm(met_vector)
             met_cone_tip = pv.Cone(
-                center=met_vector, direction=met_direction, height=3, radius=1, resolution=20
+                center=met_vector, direction=met_direction, height=0.5, radius=0.25, resolution=20
             )
             
             mesh_id = "missing_energy_vector"
