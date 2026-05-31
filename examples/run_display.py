@@ -88,6 +88,26 @@ mock_event_empty_edge_case = ak.Record({
     }
 })
 
+mock_event_w_boson = ak.Record({
+    "metadata": {"run_id": 402130, "event_id": 99828, "sqrts_gev": 13600.0},
+    "particles": {
+        # Un seul électron très dur propulsé vers la droite (phi = 0.0)
+        # Aucune autre particule majeure pour équilibrer. Le neutrino doit partir vers la gauche (phi = pi)
+        "pt": ak.Array([80.0, 1.5, 0.8]),
+        "eta": ak.Array([0.1, -1.2, 0.5]),
+        "phi": ak.Array([0.0, 0.8, -1.5]),
+        "charge": ak.Array([-1, 1, -1]),
+        "pid": ak.Array([11, 211, -211]), 
+        "name": ak.Array(["e_signal-", "pion1", "pion2"])
+    },
+    "jets": {
+        "energy": ak.Array([]),
+        "eta": ak.Array([]),
+        "phi": ak.Array([]),
+        "delta_r": ak.Array([])
+    }
+})
+
 if __name__ == "__main__":
     print("Ingesting experimental mock event data block...")
     event = load_event(mock_hep_event)
@@ -111,3 +131,7 @@ if __name__ == "__main__":
     # TEST 3 : Vérifie la robustesse (doit afficher un détecteur vide avec le vertex au centre, sans cracher)
     print("Rendering Empty Edge Case Event...")
     visualizer.plot_event(mock_event_empty_edge_case)
+
+    # TEST 3 : Vérifie la robustesse (doit afficher un détecteur vide avec le vertex au centre, sans cracher)
+    print("Rendering BOSON RED...")
+    visualizer.plot_event(mock_event_w_boson)

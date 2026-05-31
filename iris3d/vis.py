@@ -82,7 +82,8 @@ class EventVisualizer:
 
     def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8):
         """
-        Generates and displays the fluid 3D interactive scene with helical track bending.
+        Generates and displays the fluid 3D interactive scene with helical track bending
+        and Missing Transverse Energy (MET) balancing.
         """
         # 1. Initialize the high-performance PyVista Plotter
         plotter = pv.Plotter(window_size=[1024, 768], title=f"Iris3D - Run {event.metadata.run_id} Event {event.metadata.event_id}")
@@ -105,30 +106,20 @@ class EventVisualizer:
         p_paths = spatial_data["particle_paths"]
         
         # 4. Traitement et Style des Traces
-        # 4. Traitement et Style des Traces
         for i in range(len(p_paths)):
             points = p_paths[i]
             metadata = p_meta[i]
             
-            # --- EXTRACT INFO SAFELY FOR HOVER TOOLTIP ---
-            # Au lieu d'accéder à un objet particule complet, on pioche directement
-            # dans les listes de métadonnées et de coordonnées qu'on a unifiées
             p_name = metadata.get("name", f"Track {i}")
             p_pid = metadata.get("pid", 0)
             p_charge = metadata.get("charge", 0)
             
-            # On récupère le pT, l'eta et le phi d'origine depuis les vecteurs 
-            # de core.py ou depuis les variables normalisées
-            p_pt = float(spatial_data["particle_vectors"][i, 0] / p_scale) if p_scale != 0 else 0.0
-            # Pour l'affichage précis dans la boîte de dialogue, on reconstruit les valeurs nominales
-            # ou on utilise un fallback propre si ce n'est pas une dataclass standard
             try:
                 source_particle = event.particles[i]
                 pt_val = source_particle.pt
                 eta_val = source_particle.eta
                 phi_val = source_particle.phi
             except (TypeError, KeyError, IndexError, AttributeError):
-                # Fallback sécurisé si c'est une structure colonnaire Awkward Record
                 try:
                     pt_val = float(event["particles"]["pt"][i])
                     eta_val = float(event["particles"]["eta"][i])
@@ -138,12 +129,9 @@ class EventVisualizer:
                     eta_val = 0.0
                     phi_val = 0.0
             
-            # Géométrie de la trace
             if p_charge != 0:
-                # Particules chargées : Courbe continue (Spline)
                 track_mesh = pv.Spline(points, len(points))
             else:
-                # Particules neutres : Ligne droite (PolyData)
                 track_mesh = pv.PolyData(points)
                 
                 if p_pid == 22:  # Photons -> Pointillés physiques (Dashed)
@@ -158,7 +146,6 @@ class EventVisualizer:
             color = self._get_particle_color(p_pid)
             mesh_id = f"particle_{i}"
             
-            # Création du texte dynamique sans dépendances rigides envers le type de l'event
             hover_text = (
                 f"Particle Track #{i}\n"
                 f"Identity : {p_name}\n"
@@ -170,7 +157,6 @@ class EventVisualizer:
             self.tooltip_dict[mesh_id] = hover_text
             track_mesh.field_data["mesh_id"] = [mesh_id]
             
-            # Affichage final
             if p_charge == 0:
                 if p_pid == 22:
                     plotter.add_mesh(track_mesh, color=color, line_width=2.5, opacity=0.9, name=mesh_id)
@@ -178,7 +164,7 @@ class EventVisualizer:
                     plotter.add_mesh(track_mesh, color=color, line_width=1, opacity=0.5, name=mesh_id)
             else:
                 plotter.add_mesh(track_mesh, color=color, line_width=4, opacity=1.0, name=mesh_id)
-        # 5. Process and Render Jet Cones
+
         # 5. Process and Render Jet Cones
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
             direction = np.array(jet_geo["unit_direction"])
@@ -190,7 +176,6 @@ class EventVisualizer:
                 center=cone_center, direction=-direction, height=length, radius=radius, resolution=30
             )
             
-            # --- EXTRACT JET INFO SAFELY FOR HOVER TOOLTIP ---
             try:
                 source_jet = event.jets[i]
                 j_energy = source_jet.energy
@@ -198,7 +183,6 @@ class EventVisualizer:
                 j_phi = source_jet.phi
                 j_dr = source_jet.delta_r
             except (TypeError, KeyError, IndexError, AttributeError):
-                # Fallback sécurisé pour le format colonnaire Awkward Record
                 try:
                     j_energy = float(event["jets"]["energy"][i])
                     j_eta = float(event["jets"]["eta"][i])
@@ -208,7 +192,7 @@ class EventVisualizer:
                     j_energy = 0.0
                     j_eta = 0.0
                     j_phi = 0.0
-                    j_dr = 0.4  # Valeur par défaut standard en physique des particules (Anti-kT)
+                    j_dr = 0.4
             
             mesh_id = f"jet_{i}"
             jet_hover_text = (
@@ -225,6 +209,47 @@ class EventVisualizer:
             plotter.add_mesh(
                 jet_cone, color="orange", opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id
             )
+
+        # --- 5.5. Process and Render Missing Transverse Energy (MET) ---
+        met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
+        
+        if met_data["pt"] > 0.5:  # Seuil physique d'activation
+            met_vector = np.array(met_data["vector"])
+            
+            # Échantillonnage discret pour générer un maillage pointillé propre
+            met_points = np.linspace(np.array([0.0, 0.0, 0.0]), met_vector, 30)
+            met_mesh = pv.PolyData(met_points)
+            
+            met_lines = []
+            for idx in range(0, len(met_points) - 1, 2):
+                met_lines.extend([2, idx, idx + 1])
+            met_mesh.lines = np.array(met_lines, dtype=np.int32)
+            
+            # Cône directionnel pour la tête de la flèche
+            met_direction = met_vector / np.linalg.norm(met_vector)
+            met_cone_tip = pv.Cone(
+                center=met_vector,
+                direction=met_direction,
+                height=3,
+                radius=1,
+                resolution=20
+            )
+            
+            mesh_id = "missing_energy_vector"
+            met_hover_text = (
+                f"Missing Transverse Energy (MET)\n"
+                f"Unseen Momentum (pT) : {met_data['pt']:.2f} GeV\n"
+                f"phi direction        : {met_data['phi']:.2f} rad\n"
+                f"Suspected Source     : Neutrino / Dark Matter"
+            )
+            self.tooltip_dict[mesh_id] = met_hover_text
+            
+            met_mesh.field_data["mesh_id"] = [mesh_id]
+            met_cone_tip.field_data["mesh_id"] = [mesh_id]
+            
+            # Affichage de l'indicateur rouge fluo standardisé
+            plotter.add_mesh(met_mesh, color="red", line_width=5, opacity=1.0, name=f"{mesh_id}_line")
+            plotter.add_mesh(met_cone_tip, color="red", opacity=1.0, name=f"{mesh_id}_tip")
 
         # Affichage de la bannière en "upper_left" pour éviter la superposition de texte
         plotter.add_text(

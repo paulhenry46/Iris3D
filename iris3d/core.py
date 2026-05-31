@@ -40,7 +40,7 @@ class CoordinateTransformer:
         q = particle.charge
         pt = particle.pt
         
-        # if neutral, no fieald or pt, straight curve.
+        # if neutral, no field or pt, straight curve.
         if q == 0 or B_field == 0 or pt <= 0:
             return np.linspace(np.array([0.0, 0.0, 0.0]), linear_endpoint, num_points)
             
@@ -48,15 +48,11 @@ class CoordinateTransformer:
         eta = particle.eta
         theta = 2 * np.arctan(np.exp(-eta))
         
-       
         max_distance = np.linalg.norm(linear_endpoint)
         s_steps = np.linspace(0, max_distance, num_points)
         
         points = np.zeros((num_points, 3))
-        
-      
         omega = (0.3 * B_field * q) / pt  
-        
         
         points[:, 0] = (pt / (0.3 * B_field * q)) * (np.sin(phi_0 + omega * s_steps) - np.sin(phi_0))
         points[:, 1] = -(pt / (0.3 * B_field * q)) * (np.cos(phi_0 + omega * s_steps) - np.cos(phi_0))
@@ -111,7 +107,8 @@ class CoordinateTransformer:
         """
         Extracts and translates a CollisionEvent or an Awkward Record into flat, 
         structured coordinate matrices. Dynamically adapts to object attributes,
-        columnar records, or lists of individual particles.
+        columnar records, or lists of individual particles. Calculates Missing
+        Transverse Energy (MET) from total visible momentum imbalance.
         """
         p_meta = []
         p_paths = []
@@ -173,11 +170,33 @@ class CoordinateTransformer:
 
         p_count = len(pts)
 
+        # --- CALCUL DE L'ÉNERGIE TRANSVERSE MANQUANTE (MET) ---
+        met_data = {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)}
+
         if p_count > 0:
+            # Calcul vectorisé des coordonnées X, Y, Z nominales
             p_xyz = np.zeros((p_count, 3))
             p_xyz[:, 0] = pts * np.cos(phis) * p_scale
             p_xyz[:, 1] = pts * np.sin(phis) * p_scale
             p_xyz[:, 2] = pts * np.sinh(etas) * p_scale
+            
+            # Calcul de l'équilibre vectoriel transverse (X, Y)
+            sum_px = np.sum(pts * np.cos(phis))
+            sum_py = np.sum(pts * np.sin(phis))
+            
+            # Le vecteur MET pointe exactement à l'opposé de la somme visible
+            met_px = -sum_px
+            met_py = -sum_py
+            met_pt = np.sqrt(met_px**2 + met_py**2)
+            met_phi = np.arctan2(met_py, met_px)
+            
+            # Seuil de coupure physique minimal pour éviter le bruit numérique
+            if met_pt > 0.1:
+                met_data = {
+                    "pt": float(met_pt),
+                    "phi": float(met_phi),
+                    "vector": (float(met_px * p_scale), float(met_py * p_scale), 0.0)
+                }
             
             for i in range(p_count):
                 p_name = str(names[i]) if names is not None and names[i] else f"Track {i}"
@@ -255,5 +274,6 @@ class CoordinateTransformer:
             "particle_vectors": p_xyz,
             "particle_metadata": p_meta,
             "particle_paths": p_paths,
-            "jet_geometries": j_vectors
+            "jet_geometries": j_vectors,
+            "missing_energy": met_data  # <-- Nouvelle clé de sortie standardisée
         }
