@@ -7,12 +7,12 @@ from iris3d.core import CoordinateTransformer
 class EventVisualizer:
     """
     Renders high-energy physics collision events in a highly fluid,
-    GPU-accelerated 3D canvas using PyVista (VTK).
+    GPU-accelerated 3D canvas using PyVista (VTK), featuring interactive
+    picking tooltips and a passive geo-physical detector environment.
     """
     def __init__(self, theme: str = "dark"):
         self.transformer = CoordinateTransformer()
         
-        # Set up a clean, professional dark mode background for event displays
         if theme == "dark":
             pv.set_plot_theme("dark")
             
@@ -27,22 +27,77 @@ class EventVisualizer:
             return "yellow"
         elif abs_pid in (211, 321, 2212): # Charged Hadrons (Pions, Kaons, Protons)
             return "salmon"
-        return "white" # Fallback/Unknown tracks
+        return "white"
 
-    def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.05):
+    def _add_detector_geometry(self, plotter: pv.Plotter):
         """
-        Generates and displays the fluid 3D interactive scene.
+        Draws passive reference structures centered at (0,0,0) and aligned 
+        along the Z-axis (beam pipe line) to provide physical scale.
+        """
+        tracker_radius = 1.5
+        tracker_length = 5.0
+        
+        tracker = pv.Cylinder(
+            center=(0.0, 0.0, 0.0),
+            direction=(0.0, 0.0, 1.0),
+            radius=tracker_radius,
+            height=tracker_length,
+            resolution=50
+        )
+        
+        plotter.add_mesh(
+            tracker,
+            color="deepskyblue",
+            opacity=0.08,
+            style="surface",
+            show_edges=True,
+            edge_color="dodgerblue",
+            line_width=1,
+            name="detector_tracker"
+        )
+
+        calorimeter_outer_radius = 2.8
+        calorimeter_length = 6.0
+        
+        calorimeter = pv.Cylinder(
+            center=(0.0, 0.0, 0.0),
+            direction=(0.0, 0.0, 1.0),
+            radius=calorimeter_outer_radius,
+            height=calorimeter_length,
+            resolution=50
+        )
+        
+        plotter.add_mesh(
+            calorimeter,
+            color="crimson",
+            opacity=0.04,
+            style="surface",
+            show_edges=True,
+            edge_color="firebrick",
+            line_width=1,
+            name="detector_calorimeter"
+        )
+
+    def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01):
+        """
+        Generates and displays the fluid 3D interactive scene with detector environment.
         """
         # 1. Initialize the high-performance PyVista Plotter
         plotter = pv.Plotter(window_size=[1024, 768], title=f"Iris3D - Run {event.metadata.run_id} Event {event.metadata.event_id}")
         plotter.add_axes()
         plotter.show_grid(color="gray")
         
-        # 2. Add the Interaction Vertex Marker
+        # 2. Render Passive Detector Reference Subsystems
+        self._add_detector_geometry(plotter)
+        
+        # 3. Add the Interaction Vertex Marker
         vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
         plotter.add_mesh(vertex, color="magenta", render_points_as_spheres=True, label="Interaction Vertex")
         
-        # 3. Process and Vectorize Particle Tracks
+        # Dictionary to store metadata strings associated with custom geometric IDs
+        self.tooltip_dict = {}
+        
+        # 4. Process and Vectorize Particle Tracks
         spatial_data = self.transformer.extract_event_arrays(event, p_scale=p_scale, j_scale=j_scale)
         p_vectors = spatial_data["particle_vectors"]
         p_meta = spatial_data["particle_metadata"]
@@ -50,60 +105,96 @@ class EventVisualizer:
         for i in range(len(p_vectors)):
             endpoint = p_vectors[i]
             metadata = p_meta[i]
+            source_particle = event.particles[i]
             
-            # Define a flat line segment path from origin (0,0,0) to the particle endpoint
             track_line = pv.Line((0.0, 0.0, 0.0), endpoint)
-            color = self._get_particle_color(metadata["pid"])
+            color = self._get_particle_color(metadata.get("pid", 0))
+            p_name = metadata.get("name") if metadata.get("name") else f"Unassigned (PID {metadata.get('pid', 0)})"
             
-            # Neutral track distinction handling:
-            # Neutral tracks are rendered with distinct width and high transparency 
-            # to prevent blocking primary charged particle tracks.
-            if metadata["charge"] == 0:
+            mesh_id = f"particle_{i}"
+            hover_text = (
+                f"Particle Track #{i}\n"
+                f"Identity : {p_name}\n"
+                f"pT       : {source_particle.pt:.2f} GeV\n"
+                f"eta      : {source_particle.eta:.2f}\n"
+                f"phi      : {source_particle.phi:.2f} rad\n"
+                f"Charge   : {source_particle.charge}"
+            )
+            self.tooltip_dict[mesh_id] = hover_text
+            
+            track_line.field_data["mesh_id"] = [mesh_id]
+            
+            if source_particle.charge == 0:
                 plotter.add_mesh(
-                    track_line,
-                    color=color,
-                    line_width=1,
-                    opacity=0.5,
-                    name=f"particle_{i}"
+                    track_line, color=color, line_width=1, opacity=0.5, name=mesh_id
                 )
             else:
                 plotter.add_mesh(
-                    track_line, 
-                    color=color, 
-                    line_width=4, 
-                    opacity=1.0,
-                    name=f"particle_{i}"
+                    track_line, color=color, line_width=4, opacity=1.0, name=mesh_id
                 )
             
-        # 4. Process and Render Jet Cones
+        # 5. Process and Render Jet Cones
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
             direction = np.array(jet_geo["unit_direction"])
             length = jet_geo["length"]
             radius = jet_geo["radius"]
             
-            # By pointing the PyVista cone in the opposite direction (-direction),
-            # the apex (summit) flips to face the origin (0,0,0), and the cone
-            # expands outward along the true particle track trajectory
             cone_center = direction * (length / 2.0)
-            
             jet_cone = pv.Cone(
-                center=cone_center,
-                direction=-direction,  # Inverted direction of vector
-                height=length,
-                radius=radius,
-                resolution=30
+                center=cone_center, direction=-direction, height=length, radius=radius, resolution=30
             )
             
-            # Render jets with a semi-transparent, luminous orange overlay
+            source_jet = event.jets[i]
+            mesh_id = f"jet_{i}"
+            jet_hover_text = (
+                f"Reconstructed Jet #{i}\n"
+                f"Energy : {source_jet.energy:.2f} GeV\n"
+                f"eta    : {source_jet.eta:.2f}\n"
+                f"phi    : {source_jet.phi:.2f} rad\n"
+                f"delta_R: {source_jet.delta_r:.2f}"
+            )
+            self.tooltip_dict[mesh_id] = jet_hover_text
+            
+            jet_cone.field_data["mesh_id"] = [mesh_id]
+            
             plotter.add_mesh(
-                jet_cone, 
-                color="orange", 
-                opacity=0.35, 
-                show_edges=True, 
-                edge_color="darkorange",
-                name=f"jet_{i}"
+                jet_cone, color="orange", opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id
             )
-            
-        # 5. Open the fluid display engine window
+
+        # FIX 2: Relocate the custom tracker box to "upper_right" to isolate it completely
+        # from PyVista's built-in upper_left system hints!
+        plotter.add_text(
+            "Click an object to inspect...", 
+            position="upper_left", 
+            font_size=11, 
+            color="white",
+            name="metadata_banner"
+        )
+
+        # Define picker callback function
+        def picking_callback(mesh):
+            if mesh and "mesh_id" in mesh.field_data:
+                mesh_id = mesh.field_data["mesh_id"][0]
+                if mesh_id in self.tooltip_dict:
+                    plotter.add_text(
+                        self.tooltip_dict[mesh_id], 
+                        position="upper_left", 
+                        font_size=11, 
+                        color="white",
+                        name="metadata_banner"
+                    )
+                    
+        # 6. Open the engine window with clean default settings
         plotter.add_legend(bcolor=None, face="circle")
+        plotter.camera_position = [
+            (5.0, 5.0, 4.0),
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 1.0)
+        ]
+        plotter.camera.zoom(0.8)
+        
+        # FIX 1: Activate picking AFTER the renderer pipeline has established 
+        # camera positions to completely eliminate the VTK InteractorStyle console warning.
+        plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
+        
         plotter.show()

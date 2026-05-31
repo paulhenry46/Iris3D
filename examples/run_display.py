@@ -34,4 +34,4 @@ if __name__ == "__main__":
     visualizer = EventVisualizer(theme="dark")
     
     # Fire up the graphics layer!
-    visualizer.plot_event(event, p_scale=1.0, j_scale=0.02)
+    visualizer.plot_event(event, p_scale=2.2, j_scale=0.012)
