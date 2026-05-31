@@ -240,7 +240,6 @@ class EventVisualizer:
                 f"Missing Transverse Energy (MET)\n"
                 f"Unseen Momentum (pT) : {met_data['pt']:.2f} GeV\n"
                 f"phi direction        : {met_data['phi']:.2f} rad\n"
-                f"Suspected Source     : Neutrino / Dark Matter"
             )
             self.tooltip_dict[mesh_id] = met_hover_text
             
