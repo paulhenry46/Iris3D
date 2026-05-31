@@ -12,6 +12,7 @@ class EventVisualizer:
     """
     def __init__(self, theme: str = "dark"):
         self.transformer = CoordinateTransformer()
+        self.current_selected_id = None  # Tracker pour l'objet actuellement sélectionné
         
         if theme == "dark":
             pv.set_plot_theme("dark")
@@ -82,37 +83,25 @@ class EventVisualizer:
 
     def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8):
         """
-        Generates and displays the fluid 3D interactive scene with helical track bending
-        and Missing Transverse Energy (MET) balancing.
+        Generates and displays the fluid 3D interactive scene with helical track bending,
+        Missing Transverse Energy (MET) balancing and an advanced HUD Overlay.
         """
-        # 1. Initialize the high-performance PyVista Plotter with Aesthetic Adjustments
-        # 1. Initialize the high-performance PyVista Plotter with Aesthetic Adjustments
         plotter = pv.Plotter(window_size=[1024, 768], title=f"Iris3D - Run {event.metadata.run_id} Event {event.metadata.event_id}")
         
-        # --- CHANTIER 1 : CONFIGURATION VISUELLE CORRIGÉE ---
-        plotter.set_background(color="#0f172a")               # Fond Midnight Blue
+        plotter.set_background(color="#0f172a")               
         plotter.add_axes()
-        
-        # CORRECTION : On retire 'opacity' et on met une couleur subtile qui s'estompe d'elle-même (#1e293b -> #334155)
         plotter.show_grid(color="#273549")                     
-        
-        # On garde le lissage anti-aliasing (très utile pour lisser les trajectoires helicoïdales)
         plotter.enable_anti_aliasing("msaa", multi_samples=4)  
         
-        # SUPPRESSION de plotter.enable_eye_dome_lighting() pour un rendu technique plat et net
-        # ---------------------------------------------------
-
-        # 2. Render Passive Detector Reference Subsystems
         self._add_detector_geometry(plotter)
         
-        # 3. Add the Interaction Vertex Marker
         vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
         plotter.add_mesh(vertex, color="magenta", render_points_as_spheres=True, label="Interaction Vertex")
         
-        # Dictionary to store metadata strings associated with custom geometric IDs
+        # Le dictionnaire stocke : { mesh_id: (text_hud, original_color_name) }
         self.tooltip_dict = {}
+        self.current_selected_id = None
         
-        # 4. Process Particle Tracks (Helical vs Straight)
         spatial_data = self.transformer.extract_event_arrays(event, p_scale=p_scale, j_scale=j_scale, B_field=B_field)
         p_meta = spatial_data["particle_metadata"]
         p_paths = spatial_data["particle_paths"]
@@ -146,12 +135,12 @@ class EventVisualizer:
             else:
                 track_mesh = pv.PolyData(points)
                 
-                if p_pid == 22:  # Photons -> Pointillés physiques (Dashed)
+                if p_pid == 22:  
                     lines_connectivity = []
                     for idx in range(0, len(points) - 1, 2):
                         lines_connectivity.extend([2, idx, idx + 1])
                     track_mesh.lines = np.array(lines_connectivity, dtype=np.int32)
-                else:  # Hadrons Neutres -> Ligne droite continue
+                else:  
                     cells = np.hstack([[len(points)], np.arange(len(points))])
                     track_mesh.lines = cells
             
@@ -159,14 +148,15 @@ class EventVisualizer:
             mesh_id = f"particle_{i}"
             
             hover_text = (
-                f"Particle Track #{i}\n"
-                f"Identity : {p_name}\n"
-                f"pT       : {pt_val:.2f} GeV\n"
-                f"eta      : {eta_val:.2f}\n"
-                f"phi      : {phi_val:.2f} rad\n"
-                f"Charge   : {p_charge}"
+                f">> INSPECTING TARGET: PARTICLE TRACK #{i}\n"
+                f"----------------------------------------\n"
+                f" Identity    : {p_name} (PDG: {p_pid})\n"
+                f" Momentum pT : {pt_val:.2f} GeV\n"
+                f" Pseudo-Rap  : {eta_val:.2f}\n"
+                f" Azimuth phi : {phi_val:.2f} rad\n"
+                f" Charge      : {p_charge:+.0f}"
             )
-            self.tooltip_dict[mesh_id] = hover_text
+            self.tooltip_dict[mesh_id] = (hover_text, color)
             track_mesh.field_data["mesh_id"] = [mesh_id]
             
             if p_charge == 0:
@@ -207,19 +197,21 @@ class EventVisualizer:
                     j_dr = 0.4
             
             mesh_id = f"jet_{i}"
-            jet_hover_text = (
-                f"Reconstructed Jet #{i}\n"
-                f"Energy : {j_energy:.2f} GeV\n"
-                f"eta    : {j_eta:.2f}\n"
-                f"phi    : {j_phi:.2f} rad\n"
-                f"delta_R: {j_dr:.2f}"
-            )
-            self.tooltip_dict[mesh_id] = jet_hover_text
+            color = "orange"
             
+            jet_hover_text = (
+                f">> INSPECTING TARGET: RECONSTRUCTED JET #{i}\n"
+                f"----------------------------------------\n"
+                f" Transverse E : {j_energy:.2f} GeV\n"
+                f" Pseudo-Rap   : {j_eta:.2f}\n"
+                f" Azimuth phi  : {j_phi:.2f} rad\n"
+                f" Cone Radius  : {j_dr:.2f} (delta_R)"
+            )
+            self.tooltip_dict[mesh_id] = (jet_hover_text, color)
             jet_cone.field_data["mesh_id"] = [mesh_id]
             
             plotter.add_mesh(
-                jet_cone, color="orange", opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id
+                jet_cone, color=color, opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id
             )
 
         # --- 5.5. Process and Render Missing Transverse Energy (MET) ---
@@ -227,7 +219,6 @@ class EventVisualizer:
         
         if met_data["pt"] > 0.5:
             met_vector = np.array(met_data["vector"])
-            
             met_points = np.linspace(np.array([0.0, 0.0, 0.0]), met_vector, 30)
             met_mesh = pv.PolyData(met_points)
             
@@ -238,33 +229,36 @@ class EventVisualizer:
             
             met_direction = met_vector / np.linalg.norm(met_vector)
             met_cone_tip = pv.Cone(
-                center=met_vector,
-                direction=met_direction,
-                height=3,
-                radius=1,
-                resolution=20
+                center=met_vector, direction=met_direction, height=3, radius=1, resolution=20
             )
             
             mesh_id = "missing_energy_vector"
+            color = "red"
+            
             met_hover_text = (
-                f"Missing Transverse Energy (MET)\n"
-                f"Unseen Momentum (pT) : {met_data['pt']:.2f} GeV\n"
-                f"phi direction        : {met_data['phi']:.2f} rad\n"
+                f">> WARNING: MISSING TRANSVERSE ENERGY DETECTED\n"
+                f"----------------------------------------\n"
+                f" Unseen pT    : {met_data['pt']:.2f} GeV\n"
+                f" Escape Angle : {met_data['phi']:.2f} rad\n"
+                f" Source       : Neutrino / Dark Matter Candidate"
             )
-            self.tooltip_dict[mesh_id] = met_hover_text
+            self.tooltip_dict[mesh_id] = (met_hover_text, color)
             
             met_mesh.field_data["mesh_id"] = [mesh_id]
             met_cone_tip.field_data["mesh_id"] = [mesh_id]
             
-            plotter.add_mesh(met_mesh, color="red", line_width=5, opacity=1.0, name=f"{mesh_id}_line")
-            plotter.add_mesh(met_cone_tip, color="red", opacity=1.0, name=f"{mesh_id}_tip")
+            plotter.add_mesh(met_mesh, color=color, line_width=5, opacity=1.0, name=f"{mesh_id}_line")
+            plotter.add_mesh(met_cone_tip, color=color, opacity=1.0, name=f"{mesh_id}_tip")
 
-        # Affichage de la bannière en "upper_left" pour éviter la superposition de texte
+        # Initialisation de la bannière HUD technologique
         plotter.add_text(
-            "Click an object to inspect...", 
+            "IRIS3D // EVENT DETECTOR HUD ACTIVE\n"
+            "-----------------------------------\n"
+            "Select sub-atomic signature to decode...", 
             position="upper_left", 
             font_size=11, 
-            color="white",
+            font="courier",
+            color="#38bdf8",  
             name="metadata_banner"
         )
 
@@ -272,12 +266,48 @@ class EventVisualizer:
         def picking_callback(mesh):
             if mesh and "mesh_id" in mesh.field_data:
                 mesh_id = mesh.field_data["mesh_id"][0]
+                
                 if mesh_id in self.tooltip_dict:
+                    hud_text, orig_color_name = self.tooltip_dict[mesh_id]
+                    
+                    # Conversion propre du nom de la couleur vers un tuple RGB compatible VTK via PyVista
+                    rgb_orig = pv.Color(orig_color_name).float_rgb
+                    rgb_white = (1.0, 1.0, 1.0)
+                    
+                    # 1. Restauration de l'ancien acteur sélectionné
+                    if self.current_selected_id and self.current_selected_id in self.tooltip_dict:
+                        old_id = self.current_selected_id
+                        _, old_color_name = self.tooltip_dict[old_id]
+                        rgb_old = pv.Color(old_color_name).float_rgb
+                        
+                        if old_id.startswith("missing_energy"):
+                            if f"{old_id}_line" in plotter.actors:
+                                plotter.actors[f"{old_id}_line"].GetProperty().SetColor(rgb_old)
+                            if f"{old_id}_tip" in plotter.actors:
+                                plotter.actors[f"{old_id}_tip"].GetProperty().SetColor(rgb_old)
+                        else:
+                            if old_id in plotter.actors:
+                                plotter.actors[old_id].GetProperty().SetColor(rgb_old)
+                    
+                    # 2. Application de la surbrillance blanche sur le nouvel acteur sélectionné
+                    if mesh_id.startswith("missing_energy"):
+                        if f"{mesh_id}_line" in plotter.actors:
+                            plotter.actors[f"{mesh_id}_line"].GetProperty().SetColor(rgb_white)
+                        if f"{mesh_id}_tip" in plotter.actors:
+                            plotter.actors[f"{mesh_id}_tip"].GetProperty().SetColor(rgb_white)
+                    else:
+                        if mesh_id in plotter.actors:
+                            plotter.actors[mesh_id].GetProperty().SetColor(rgb_white)
+                            
+                    self.current_selected_id = mesh_id
+                    
+                    # 3. Mise à jour du texte du HUD
                     plotter.add_text(
-                        self.tooltip_dict[mesh_id], 
+                        hud_text, 
                         position="upper_left", 
                         font_size=11, 
-                        color="white",
+                        font="courier",
+                        color="#38bdf8",
                         name="metadata_banner"
                     )
                     
