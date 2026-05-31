@@ -53,7 +53,8 @@ class EventVisualizer:
             show_edges=True,
             edge_color="dodgerblue",
             line_width=1,
-            name="detector_tracker"
+            name="detector_tracker",
+            pickable=False
         )
 
         calorimeter_outer_radius = 2.8
@@ -75,7 +76,8 @@ class EventVisualizer:
             show_edges=True,
             edge_color="firebrick",
             line_width=1,
-            name="detector_calorimeter"
+            name="detector_calorimeter",
+            pickable=False
         )
 
     def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01):
