@@ -11,6 +11,28 @@ class CoordinateTransformer:
     """
 
     @staticmethod
+    def get_path_at_time(full_path: np.ndarray, current_radius: float) -> Optional[np.ndarray]:
+        """
+        Filters a pre-calculated 3D particle path array, returning only the points
+        that fall within the current expanding wavefront radius.
+        """
+        if len(full_path) == 0:
+            return None
+            
+        # Calcul du rayon cylindrique de chaque point de la trace
+        radii = np.sqrt(full_path[:, 0]**2 + full_path[:, 1]**2)
+        
+        # On ne garde que les points à l'intérieur du front de l'explosion
+        visible_indices = np.where(radii <= current_radius)[0]
+        
+        if len(visible_indices) == 0:
+            return None
+            
+        # On extrait la sous-trace visible
+        cutoff_idx = visible_indices[-1] + 1
+        return full_path[:max(2, cutoff_idx)]
+    
+    @staticmethod
     def particle_to_vector(particle: Particle, scale: float = 1.0) -> Tuple[float, float, float]:
         """
         Calculates the 3D momentum trajectory vector of a single particle.

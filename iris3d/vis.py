@@ -334,3 +334,162 @@ class EventVisualizer:
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         
         plotter.show()
+
+    def animate_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8, speed: float = 0.05):
+        """
+        Version épurée et robuste de l'animation temporelle.
+        Ouvre une fenêtre interactive native et force le rendu à chaque pas de temps.
+        """
+        plotter = pv.Plotter(window_size=[1024, 768], title="Iris3D - TOF Animation")
+        plotter.set_background(color="#0f172a")
+        plotter.add_axes()
+        plotter.show_grid(color="#273549")
+        
+        # 1. Extraction des données géométriques
+        spatial_data = self.transformer.extract_event_arrays(
+            event, p_scale=p_scale, j_scale=j_scale, B_field=B_field,
+            detector_ecal_r=self.detector_ecal_r,
+            detector_hcal_r=self.calorimeter_outer_radius,
+            detector_muon_r=self.detector_muon_r
+        )
+        p_paths = spatial_data["particle_paths"]
+        p_meta = spatial_data["particle_metadata"]
+        met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
+        
+        # Vertex fixe
+        vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
+        plotter.add_mesh(vertex, color="magenta", render_points_as_spheres=True)
+        
+        # Structure du Détecteur (Calorimètre)
+        calorimeter_mesh = pv.Cylinder(
+            center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), 
+            radius=self.calorimeter_outer_radius, height=6.0, resolution=50
+        )
+        calorimeter_actor = plotter.add_mesh(
+            calorimeter_mesh, color="crimson", opacity=0.02, style="surface", 
+            show_edges=True, edge_color="firebrick"
+        )
+
+        # HUD Textuel 2D classique stable
+        hud = plotter.add_text("IRIS3D // INITIALIZING SIMULATION...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
+
+        # Positionnement initial de la caméra
+        plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
+        plotter.camera.zoom(0.8)
+        
+        # OUVERTURE DE LA FENÊTRE EN MODE INTERACTIF DYNAMIQUE
+        # Ne bloque pas le script, initialise les buffers graphiques VTK
+        plotter.show(auto_close=False, interactive_update=True)
+
+        max_r = self.detector_muon_r
+        current_r = 0.0
+
+        # 2. BOUCLE DE PROPAGATION CHRONOLOGIQUE
+        # Tant que l'utilisateur n'a pas fermé la fenêtre (via la croix ou la touche 'q')
+        while not plotter.render_window.GetInteractor().GetDone():
+            
+            # Progression du front de l'explosion
+            current_r += speed
+            if current_r > max_r + 0.5:
+                current_r = 0.0  # Looping de la collision
+            
+            # --- CHRONOLOGIE PAR COUCHES DETECTEUR ---
+            
+            # A. Calorimètre (Allumage progressif à l'impact)
+            if current_r >= self.detector_ecal_r:
+                opacity_pulse = 0.15 if current_r < self.calorimeter_outer_radius else 0.06
+                calorimeter_actor.GetProperty().SetOpacity(opacity_pulse)
+                calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("red").float_rgb)
+            else:
+                calorimeter_actor.GetProperty().SetOpacity(0.02)
+                calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
+
+            # B. Traces de particules (Expansion géométrique)
+            for i, path in enumerate(p_paths):
+                mesh_id = f"particle_{i}"
+                p_charge = p_meta[i]["charge"]
+                color = self._get_particle_color(p_meta[i]["pid"])
+                
+                # Récupération des points bruts coupés à l'instant t par le transformer
+                visible_points = self.transformer.get_path_at_time(path, current_r)
+                
+                # On vérifie qu'on a au moins un début de trajectoire
+                if visible_points is not None and len(visible_points) > 0:
+                    visible_points = np.array(visible_points)
+                    
+                    # --- SÉCURITÉ / INTERPOLATION ---
+                    # Si on n'a qu'un seul point (ex: juste le vertex), on crée un micro-segment 
+                    # stationnaire pour que VTK accepte de dessiner, évitant le "saut" initial.
+                    if len(visible_points) == 1:
+                        smoothed_points = np.vstack([visible_points[0], visible_points[0]])
+                    
+                    # Si on a des points mais qu'on veut garantir une ligne ultra-fluide sans "trous",
+                    # on peut interpoler linéairement entre les points existants.
+                    else:
+                        # On génère par exemple 50 points interpolés le long de la trace actuelle
+                        t_brut = np.linspace(0, 1, len(visible_points))
+                        t_interp = np.linspace(0, 1, 50)
+                        
+                        smoothed_points = np.zeros((50, 3))
+                        for coord in range(3):  # Interpolation indépendante pour X, Y, Z
+                            smoothed_points[:, coord] = np.interp(t_interp, t_brut, visible_points[:, coord])
+
+                    # --- AFFICHAGE PYVISTA ---
+                    if p_charge != 0 and len(visible_points) > 1:
+                        # Les chargées profitent toujours de la Spline pour les courbes
+                        sub_mesh = pv.Spline(smoothed_points, n_points=100)
+                    else:
+                        # Les neutres (ou traces naissantes) utilisent le PolyData interpolé
+                        sub_mesh = pv.PolyData(smoothed_points)
+                        sub_mesh.lines = np.hstack([[len(smoothed_points)], np.arange(len(smoothed_points))])
+                        
+                    plotter.add_mesh(
+                        sub_mesh, color=color, 
+                        line_width=4 if p_charge != 0 else 1.5, name=mesh_id, pickable=False
+                    )
+                else:
+                    # Nettoyage si la particule n'est pas encore active
+                    if mesh_id in plotter.actors:
+                        plotter.remove_actor(mesh_id)
+
+            # C. Cônes de Jets (Allumage post-tracker)
+            for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
+                mesh_id = f"jet_{i}"
+                if current_r >= self.tracker_radius:
+                    direction = np.array(jet_geo["unit_direction"])
+                    length, radius = jet_geo["length"], jet_geo["radius"]
+                    jet_cone = pv.Cone(center=direction * (length / 2.0), direction=-direction, height=length, radius=radius, resolution=30)
+                    plotter.add_mesh(
+                        jet_cone, color="orange", opacity=min(0.35, (current_r - self.tracker_radius) * 0.2), 
+                        show_edges=True, edge_color="darkorange", name=mesh_id, pickable=False
+                    )
+                else:
+                    if mesh_id in plotter.actors:
+                        plotter.remove_actor(mesh_id)
+
+            # D. Vecteur MET (Énergie manquante visible en périphérie externe)
+            if met_data["pt"] > 0.5 and current_r >= self.calorimeter_outer_radius:
+                met_vector = np.array(met_data["vector"])
+                met_mesh = pv.PolyData(np.linspace([0,0,0], met_vector, 10))
+                met_mesh.lines = np.hstack([[10], np.arange(10)])
+                met_cone = pv.Cone(center=met_vector, direction=met_vector/np.linalg.norm(met_vector), height=0.5, radius=0.25)
+                plotter.add_mesh(met_mesh, color="red", line_width=5, name="met_line", pickable=False)
+                plotter.add_mesh(met_cone, color="red", name="met_tip", pickable=False)
+            else:
+                if "met_line" in plotter.actors: plotter.remove_actor("met_line")
+                if "met_tip" in plotter.actors: plotter.remove_actor("met_tip")
+
+            # Mise à jour des informations textuelles du HUD
+            hud.SetInput(
+                f"IRIS3D // TIME-OF-FLIGHT SIMULATION ACTIVE\n"
+                f"-------------------------------------------\n"
+                f"Wavefront Radius : {current_r:.2f} meters\n"
+                f"Sub-atomic State : {'TRACKING CORE' if current_r < self.detector_ecal_r else 'CALORIMETER SHOWER'}"
+            )
+
+            # 3. RAFRAÎCHISSEMENT ET TRAITEMENT DES ÉVÉNEMENTS SOURIS
+            # L'argument numérique contrôle la pause (en ms) entre deux frames
+            plotter.update(16, force_redraw=True)
+            
+        # Fermeture propre lorsque l'utilisateur quitte la boucle
+        plotter.close()
