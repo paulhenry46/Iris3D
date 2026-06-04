@@ -337,9 +337,7 @@ class EventVisualizer:
 
     def animate_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8, speed: float = 0.05):
         """
-        Version cinématique avancée stable. Includes a pre-collision beam animation,
-        a localized wavefront shockwave flash upon calorimeter impact, stabilized MET, 
-        and clean photon lines without artifacts.
+        Version cinématique avancée stable avec contrôle de pause (Barre Espace).
         """
         import numpy as np
         import pyvista as pv
@@ -383,7 +381,7 @@ class EventVisualizer:
 
         hud = plotter.add_text("IRIS3D // INJECTING BEAMS...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
 
-        # --- PRÉ-INSTANCIATION DE LA MET UNIQUE (Évite le gigotement et le clignotement) ---
+        # --- PRÉ-INSTANCIATION DE LA MET UNIQUE ---
         met_actor_line = None
         met_actor_tip = None
         if met_data["pt"] > 0.5:
@@ -391,7 +389,7 @@ class EventVisualizer:
             # Ligne de corps du vecteur MET
             met_mesh_line = pv.Line([0, 0, 0], met_vector)
             met_actor_line = plotter.add_mesh(met_mesh_line, color="red", line_width=5, pickable=False)
-            met_actor_line.SetVisibility(False)  # Masqué au début (temps négatif)
+            met_actor_line.SetVisibility(False)
             
             # Cône de pointe haute résolution stable (60 facettes parfaites)
             met_cone = pv.Cone(
@@ -399,7 +397,17 @@ class EventVisualizer:
                 height=0.5, radius=0.25, resolution=60
             )
             met_actor_tip = plotter.add_mesh(met_cone, color="red", pickable=False)
-            met_actor_tip.SetVisibility(False)  # Masqué au début
+            met_actor_tip.SetVisibility(False)
+
+        # --- GESTION DE LA PAUSE VIA CLAVIER ---
+        # Utilisation d'un dictionnaire pour passer la variable par référence au callback
+        state = {"is_paused": False}
+
+        def toggle_pause():
+            state["is_paused"] = not state["is_paused"]
+
+        # NOUVELLE LIGNES SÉCURISÉE :
+        plotter.add_key_event('space', toggle_pause)
 
         # Position initiale fixe de la caméra
         plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
@@ -408,14 +416,16 @@ class EventVisualizer:
         plotter.show(auto_close=False, interactive_update=True)
 
         max_r = self.detector_muon_r
-        current_r = -3.0  # On commence à t = -3.0 pour l'injection
+        current_r = -3.0  
 
         # 2. BOUCLE PRINCIPALE
         while not plotter.render_window.GetInteractor().GetDone():
             
-            current_r += speed
-            if current_r > max_r + 0.5:
-                current_r = -3.0  # On reboucle au tout début
+            # On ne fait progresser le temps que si on n'est pas en pause
+            if not state["is_paused"]:
+                current_r += speed
+                if current_r > max_r + 0.5:
+                    current_r = -3.0  
 
             # ==========================================================
             # PHASE 1 : ANIMATION PRÉ-COLLISION (Faisceaux entrants)
@@ -448,7 +458,8 @@ class EventVisualizer:
                 vertex = pv.Sphere(radius=0.03, center=(0.0, 0.0, 0.0))
                 plotter.add_mesh(vertex, color="gray", name="vertex", pickable=False)
                 
-                hud.SetInput("IRIS3D // LHC BEAMS APPROACHING\n-------------------------------------------\nStatus: STEERING PACKETS")
+                status_txt = "STATUS: PAUSED" if state["is_paused"] else "Status: STEERING PACKETS"
+                hud.SetInput(f"IRIS3D // LHC BEAMS APPROACHING\n-------------------------------------------\n{status_txt}")
                 
             # ==========================================================
             # PHASE 2 : IMPACT & EXPULSION (Collision active)
@@ -484,7 +495,7 @@ class EventVisualizer:
                     calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
                     if "shockwave" in plotter.actors: plotter.remove_actor("shockwave")
 
-                # --- DESSIN DES PARTICULES (Zéro points carrés) ---
+                # --- DESSIN DES PARTICULES ---
                 for i, path in enumerate(p_paths):
                     mesh_id = f"particle_{i}"
                     p_charge = p_meta[i]["charge"]
@@ -538,15 +549,16 @@ class EventVisualizer:
                     if met_actor_line: met_actor_line.SetVisibility(False)
                     if met_actor_tip: met_actor_tip.SetVisibility(False)
 
-                # Mise à jour des données textuelles du HUD
+                # Mise à jour du HUD avec indicateur de Pause
+                state_label = "|| PAUSED" if state["is_paused"] else ('TRACKING CORE' if current_r < self.detector_ecal_r else 'CALORIMETER SHOWER')
                 hud.SetInput(
                     f"IRIS3D // TIME-OF-FLIGHT SIMULATION ACTIVE\n"
                     f"-------------------------------------------\n"
                     f"Wavefront Radius : {current_r:.2f} meters\n"
-                    f"Sub-atomic State : {'TRACKING CORE' if current_r < self.detector_ecal_r else 'CALORIMETER SHOWER'}"
+                    f"Sub-atomic State : {state_label}"
                 )
 
-            # Cadencement à 16ms (~60 FPS) avec rafraîchissement d'interactivité souris
+            # Cadencement et écoute active des touches/souris
             plotter.update(16, force_redraw=True)
             
         plotter.close()
