@@ -337,7 +337,7 @@ class EventVisualizer:
 
     def animate_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8, speed: float = 0.05):
         """
-        Version cinématique avancée stable avec contrôle de pause (Barre Espace).
+        Advanced stable cinematic version.
         """
         import numpy as np
         import pyvista as pv
@@ -347,7 +347,7 @@ class EventVisualizer:
         plotter.add_axes()
         plotter.show_grid(color="#273549")
         
-        # 1. Extraction des données
+        # 1. Data extraction
         spatial_data = self.transformer.extract_event_arrays(
             event, p_scale=p_scale, j_scale=j_scale, B_field=B_field,
             detector_ecal_r=self.detector_ecal_r,
@@ -358,7 +358,7 @@ class EventVisualizer:
         p_meta = spatial_data["particle_metadata"]
         met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
         
-        # Structure géométrique : Le Calorimètre
+        # Geometric structure: The Calorimeter
         calorimeter_mesh = pv.Cylinder(
             center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), 
             radius=self.calorimeter_outer_radius, height=6.0, resolution=50
@@ -368,7 +368,7 @@ class EventVisualizer:
             show_edges=True, edge_color="firebrick"
         )
 
-        # Structure géométrique : Le Tracker intégré
+        # Geometric structure: The Integrated Tracker
         tracker_mesh = pv.Cylinder(
             center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0),
             radius=self.tracker_radius, height=self.tracker_length, resolution=50
@@ -381,17 +381,17 @@ class EventVisualizer:
 
         hud = plotter.add_text("IRIS3D // INJECTING BEAMS...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
 
-        # --- PRÉ-INSTANCIATION DE LA MET UNIQUE ---
+        # --- UNIQUE MET PRE-INSTANTIATION ---
         met_actor_line = None
         met_actor_tip = None
         if met_data["pt"] > 0.5:
             met_vector = np.array(met_data["vector"])
-            # Ligne de corps du vecteur MET
+            # Body line of the MET vector
             met_mesh_line = pv.Line([0, 0, 0], met_vector)
             met_actor_line = plotter.add_mesh(met_mesh_line, color="red", line_width=5, pickable=False)
             met_actor_line.SetVisibility(False)
             
-            # Cône de pointe haute résolution stable (60 facettes parfaites)
+            # Stable high-resolution tip cone (60 perfect facets)
             met_cone = pv.Cone(
                 center=met_vector, direction=met_vector/np.linalg.norm(met_vector), 
                 height=0.5, radius=0.25, resolution=60
@@ -399,17 +399,17 @@ class EventVisualizer:
             met_actor_tip = plotter.add_mesh(met_cone, color="red", pickable=False)
             met_actor_tip.SetVisibility(False)
 
-        # --- GESTION DE LA PAUSE VIA CLAVIER ---
-        # Utilisation d'un dictionnaire pour passer la variable par référence au callback
+        # --- KEYBOARD PAUSE MANAGEMENT ---
+        # Using a dictionary to pass the variable by reference to the callback
         state = {"is_paused": False}
 
         def toggle_pause():
             state["is_paused"] = not state["is_paused"]
 
-        # NOUVELLE LIGNES SÉCURISÉE :
+        # NEW SECURED LINES:
         plotter.add_key_event('space', toggle_pause)
 
-        # Position initiale fixe de la caméra
+        # Fixed initial camera position
         plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
         plotter.camera.zoom(0.8)
         
@@ -418,35 +418,35 @@ class EventVisualizer:
         max_r = self.detector_muon_r
         current_r = -3.0  
 
-        # 2. BOUCLE PRINCIPALE
+        # 2. MAIN LOOP
         while not plotter.render_window.GetInteractor().GetDone():
             
-            # On ne fait progresser le temps que si on n'est pas en pause
+            # Time only progresses if not paused
             if not state["is_paused"]:
                 current_r += speed
                 if current_r > max_r + 0.5:
-                    current_r = -3.0  
+                    current_r = -3.0  # Loops back to the very beginning
 
             # ==========================================================
-            # PHASE 1 : ANIMATION PRÉ-COLLISION (Faisceaux entrants)
+            # PHASE 1: PRE-COLLISION ANIMATION (Incoming beams)
             # ==========================================================
             if current_r < 0:
-                # Masquage immédiat de la MET fixe
+                # Immediate hiding of the fixed MET
                 if met_actor_line: met_actor_line.SetVisibility(False)
                 if met_actor_tip: met_actor_tip.SetVisibility(False)
                 
-                # Nettoyage complet des acteurs de l'explosion précédente
+                # Complete cleanup of actors from the previous explosion
                 for i in range(len(p_paths)):
                     if f"particle_{i}" in plotter.actors: plotter.remove_actor(f"particle_{i}")
                 for i in range(len(spatial_data.get("jet_geometries", []))):
                     if f"jet_{i}" in plotter.actors: plotter.remove_actor(f"jet_{i}")
                 if "shockwave" in plotter.actors: plotter.remove_actor("shockwave")
                 
-                # Remise à zéro visuelle du calorimètre
+                # Visual reset of the calorimeter
                 calorimeter_actor.GetProperty().SetOpacity(0.02)
                 calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
                 
-                # Position et déplacement des faisceaux (axe Z)
+                # Position and movement of the beams (Z axis)
                 z_pos = -current_r
                 beam1 = pv.Line([0, 0, z_pos], [0, 0, max(0, z_pos - 1.0)])
                 beam2 = pv.Line([0, 0, -z_pos], [0, 0, min(0, -z_pos + 1.0)])
@@ -454,7 +454,7 @@ class EventVisualizer:
                 plotter.add_mesh(beam1, color="#38bdf8", line_width=6, name="beam1", pickable=False)
                 plotter.add_mesh(beam2, color="#38bdf8", line_width=6, name="beam2", pickable=False)
                 
-                # Vertex en attente
+                # Standby Vertex
                 vertex = pv.Sphere(radius=0.03, center=(0.0, 0.0, 0.0))
                 plotter.add_mesh(vertex, color="gray", name="vertex", pickable=False)
                 
@@ -462,14 +462,14 @@ class EventVisualizer:
                 hud.SetInput(f"IRIS3D // LHC BEAMS APPROACHING\n-------------------------------------------\n{status_txt}")
                 
             # ==========================================================
-            # PHASE 2 : IMPACT & EXPULSION (Collision active)
+            # PHASE 2: IMPACT & EJECTION (Active collision)
             # ==========================================================
             else:
-                # Suppression des paquets de faisceaux initiaux
+                # Removal of initial beam packets
                 if "beam1" in plotter.actors: plotter.remove_actor("beam1")
                 if "beam2" in plotter.actors: plotter.remove_actor("beam2")
                 
-                # Flash transitoire du Vertex à l'impact (t=0)
+                # Transient flash of the Vertex at impact (t=0)
                 if current_r < 0.2:
                     vertex = pv.Sphere(radius=0.12, center=(0.0, 0.0, 0.0))
                     plotter.add_mesh(vertex, color="white", name="vertex", pickable=False)
@@ -477,13 +477,13 @@ class EventVisualizer:
                     vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
                     plotter.add_mesh(vertex, color="magenta", name="vertex", pickable=False)
 
-                # --- CHRONOLOGIE DÉTECTEUR & ONDE DE CHOC ---
+                # --- DETECTOR TIMELINE & SHOCKWAVE EFFECT ---
                 if current_r >= self.detector_ecal_r:
                     opacity_pulse = 0.15 if current_r < self.calorimeter_outer_radius else 0.06
                     calorimeter_actor.GetProperty().SetOpacity(opacity_pulse)
                     calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("red").float_rgb)
                     
-                    # Génération de la shockwave filaire orange sur le front d'onde
+                    # Generation of the wireframe orange shockwave on the wavefront
                     if current_r < self.calorimeter_outer_radius + 0.3:
                         wave_radius = current_r
                         shockwave = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=wave_radius, height=5.8, resolution=40)
@@ -495,7 +495,7 @@ class EventVisualizer:
                     calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
                     if "shockwave" in plotter.actors: plotter.remove_actor("shockwave")
 
-                # --- DESSIN DES PARTICULES ---
+                # --- PARTICLE DRAWING ---
                 for i, path in enumerate(p_paths):
                     mesh_id = f"particle_{i}"
                     p_charge = p_meta[i]["charge"]
@@ -507,7 +507,7 @@ class EventVisualizer:
                         visible_points = np.array(visible_points)
                         
                         if p_charge != 0 and len(visible_points) > 1:
-                            # --- PARTICULES CHARGÉES (Spline continue) ---
+                            # --- CHARGED PARTICLES (Continuous Spline) ---
                             t_brut = np.linspace(0, 1, len(visible_points))
                             t_interp = np.linspace(0, 1, 50)
                             smoothed_points = np.zeros((50, 3))
@@ -517,11 +517,11 @@ class EventVisualizer:
                             sub_mesh = pv.Spline(smoothed_points, n_points=100)
                             plotter.add_mesh(sub_mesh, color=color, line_width=4, name=mesh_id, pickable=False)
                         else:
-                            # --- PARTICULES NEUTRES / PHOTONS (Ligne pure sans aucun point) ---
+                            # --- NEUTRAL PARTICLES / PHOTONS (Pure line without any points) ---
                             p_start = visible_points[0]
                             p_end = visible_points[-1]
                             
-                            # Sécurité VTK si le segment est encore confondu à l'origine
+                            # VTK safety fallback if the segment is still merged at the origin
                             if np.allclose(p_start, p_end):
                                 p_end = p_start + np.array([1e-5, 0.0, 0.0])
                                 
@@ -530,7 +530,7 @@ class EventVisualizer:
                     else:
                         if mesh_id in plotter.actors: plotter.remove_actor(mesh_id)
 
-                # --- ANIMATION DES JETS ---
+                # --- JET ANIMATION ---
                 for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
                     mesh_id = f"jet_{i}"
                     if current_r >= self.tracker_radius:
@@ -541,7 +541,7 @@ class EventVisualizer:
                     else:
                         if mesh_id in plotter.actors: plotter.remove_actor(mesh_id)
 
-                # --- CONTROL DE LA VISIBILITÉ DE LA MET STABLE ---
+                # --- VISIBILITY CONTROL OF THE STABLE MET ---
                 if met_data["pt"] > 0.5 and current_r >= self.calorimeter_outer_radius:
                     if met_actor_line: met_actor_line.SetVisibility(True)
                     if met_actor_tip: met_actor_tip.SetVisibility(True)
@@ -549,7 +549,7 @@ class EventVisualizer:
                     if met_actor_line: met_actor_line.SetVisibility(False)
                     if met_actor_tip: met_actor_tip.SetVisibility(False)
 
-                # Mise à jour du HUD avec indicateur de Pause
+                # Updating the HUD with Pause indicator
                 state_label = "|| PAUSED" if state["is_paused"] else ('TRACKING CORE' if current_r < self.detector_ecal_r else 'CALORIMETER SHOWER')
                 hud.SetInput(
                     f"IRIS3D // TIME-OF-FLIGHT SIMULATION ACTIVE\n"
@@ -558,7 +558,7 @@ class EventVisualizer:
                     f"Sub-atomic State : {state_label}"
                 )
 
-            # Cadencement et écoute active des touches/souris
+            # Timing rate and active touch/mouse event listening
             plotter.update(16, force_redraw=True)
             
         plotter.close()
