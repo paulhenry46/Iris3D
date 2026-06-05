@@ -257,17 +257,15 @@ class EventVisualizer:
 
     def animate_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8, speed: float = 0.05):
         """
-        Advanced stable cinematic version with split screen layout.
-        - Left (0, 0): 3D Cylindrical detector view
-        - Right (0, 1): Flat 2D/3D Lego Plot (eta vs phi vs pT)
-        Fixes the Lego tower initial height glitch and prevents window freeze upon close.
+        Optimized High-Performance Cinematic Version.
+        Zero allocations inside the render loop for 60 FPS fluid rendering.
         """
         import numpy as np
         import pyvista as pv
 
         plotter = pv.Plotter(window_size=[1500, 750], shape=(1, 2), title="Iris3D - Dual Cinematic Display & Lego Plot")
         
-        # 1. Extraction des données spatiales
+        # 1. EXTRACTION DES DONNÉES SPATIALES (Unique)
         spatial_data = self.transformer.extract_event_arrays(
             event, p_scale=p_scale, j_scale=j_scale, B_field=B_field,
             detector_ecal_r=self.detector_ecal_r,
@@ -279,67 +277,76 @@ class EventVisualizer:
         met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
         jet_geometries = spatial_data.get("jet_geometries", [])
 
-        # --- PRÉ-CALCUL UNIQUE DES GABARITS LEGO EN VRAIE 3D ---
-        base_lego_meshes = []
-        max_heights = []
-        for jet_geo in jet_geometries:
-            direction = np.array(jet_geo["unit_direction"])
-            length = jet_geo["length"]
-            eta = jet_geo.get("eta", direction[2] * 1.5)
-            phi = jet_geo.get("phi", np.arctan2(direction[1], direction[0]))
-            pt_energy = jet_geo.get("pt", jet_geo.get("energy", length * 10.0))
-            
-            # CRUCIAL : On crée une vraie boîte 3D de hauteur 1.0. 
-            # Les faces latérales existent maintenant et seront correctement étirées.
-            base_box = pv.Box(bounds=[
-                eta - 0.18, eta + 0.18,
-                phi - 0.18, phi + 0.18,
-                0.0, 1.0
-            ])
-            base_lego_meshes.append(base_box)
-            max_heights.append(pt_energy * 0.08)
-        
         # ==========================================================
-        # INITIALISATION STRICTE DU SUBPLOT GAUCHE : DÉTECTEUR CYLINDRIQUE 3D
+        # INITIALISATION ET PRÉ-RENDU : SUBPLOT GAUCHE (DÉTECTEUR)
         # ==========================================================
         plotter.subplot(0, 0)
         plotter.set_background(color="#0f172a")
         plotter.add_axes()
         plotter.show_grid(color="#273549")
         
-        calorimeter_mesh = pv.Cylinder(
-            center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), 
-            radius=self.calorimeter_outer_radius, height=6.0, resolution=50
-        )
-        calorimeter_actor = plotter.add_mesh(
-            calorimeter_mesh, color="crimson", opacity=0.02, style="surface", 
-            show_edges=True, edge_color="firebrick"
-        )
+        # Détecteurs passifs
+        calorimeter_mesh = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.calorimeter_outer_radius, height=6.0, resolution=50)
+        calorimeter_actor = plotter.add_mesh(calorimeter_mesh, color="crimson", opacity=0.02, style="surface", show_edges=True, edge_color="firebrick")
 
-        tracker_mesh = pv.Cylinder(
-            center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0),
-            radius=self.tracker_radius, height=self.tracker_length, resolution=50
-        )
-        plotter.add_mesh(
-            tracker_mesh, color="deepskyblue", opacity=0.08, style="surface",
-            show_edges=True, edge_color="dodgerblue", line_width=1,
-            name="detector_tracker", pickable=False
-        )
+        tracker_mesh = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.tracker_radius, height=self.tracker_length, resolution=50)
+        plotter.add_mesh(tracker_mesh, color="deepskyblue", opacity=0.08, style="surface", show_edges=True, edge_color="dodgerblue", name="detector_tracker", pickable=False)
 
-        hud = plotter.add_text("IRIS3D // INJECTING BEAMS...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
+        hud = plotter.add_text("IRIS3D // INITIALIZING...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
 
-        met_actor_line = None
-        met_actor_tip = None
+        # Éléments statiques / Faisceaux pré-créés
+        beam1 = pv.Line([0, 0, 5.0], [0, 0, 0.0]) # Ajusté statique pour être modifié par position/opacité
+        beam2 = pv.Line([0, 0, -5.0], [0, 0, 0.0])
+        beam1_actor = plotter.add_mesh(beam1, color="#38bdf8", line_width=6, pickable=False)
+        beam2_actor = plotter.add_mesh(beam2, color="#38bdf8", line_width=6, pickable=False)
+        
+        vertex_mesh = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
+        vertex_actor = plotter.add_mesh(vertex_mesh, color="gray", pickable=False)
+
+        # Onde de choc pré-créée (On va juste scaler son rayon !)
+        shockwave_base = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=1.0, height=5.8, resolution=40)
+        shockwave_actor = plotter.add_mesh(shockwave_base, color="orange", opacity=0.0, style="wireframe", line_width=2, pickable=False)
+
+        # Pré-allocation de TOUTES les trajectoires de particules complètes
+        particle_actors = []
+        particle_polydata_lists = [] # Pour stocker les références vers les points géométriques mutables
+        
+        for i, path in enumerate(p_paths):
+            color = self._get_particle_color(p_meta[i]["pid"])
+            # On génère la trajectoire complète au repos dès le début
+            full_path = np.array(path)
+            poly = pv.PolyData(full_path)
+            # Création des lignes reliant les points
+            cells = np.full((len(full_path)-1, 3), 2, dtype=np.int_)
+            cells[:, 1] = np.arange(0, len(full_path)-1)
+            cells[:, 2] = np.arange(1, len(full_path))
+            poly.lines = cells
+            
+            lw = 4 if p_meta[i]["charge"] != 0 else 1.5
+            act = plotter.add_mesh(poly, color=color, line_width=lw, pickable=False)
+            act.SetVisibility(False)
+            
+            particle_actors.append(act)
+            particle_polydata_lists.append((poly, full_path)) # Sauvegarde pour manipulation rapide
+
+        # Cômes de Jets Gauche
+        jet_actors = []
+        for jet_geo in jet_geometries:
+            direction = np.array(jet_geo["unit_direction"])
+            length, radius = jet_geo["length"], jet_geo["radius"]
+            jet_cone = pv.Cone(center=direction * (length / 2.0), direction=-direction, height=length, radius=radius, resolution=30)
+            act = plotter.add_mesh(jet_cone, color="orange", opacity=0.0, show_edges=True, edge_color="darkorange", pickable=False)
+            jet_actors.append(act)
+
+        # MET Flèche
+        met_actor_line, met_actor_tip = None, None
         if met_data["pt"] > 0.5:
             met_vector = np.array(met_data["vector"])
             met_mesh_line = pv.Line([0, 0, 0], met_vector)
             met_actor_line = plotter.add_mesh(met_mesh_line, color="red", line_width=5, pickable=False)
             met_actor_line.SetVisibility(False)
             
-            met_cone = pv.Cone(
-                center=met_vector, direction=met_vector/np.linalg.norm(met_vector), 
-                height=0.5, radius=0.25, resolution=60
-            )
+            met_cone = pv.Cone(center=met_vector, direction=met_vector/np.linalg.norm(met_vector), height=0.5, radius=0.25, resolution=60)
             met_actor_tip = plotter.add_mesh(met_cone, color="red", pickable=False)
             met_actor_tip.SetVisibility(False)
 
@@ -347,7 +354,7 @@ class EventVisualizer:
         plotter.camera.zoom(0.8)
 
         # ==========================================================
-        # INITIALISATION STRICTE DU SUBPLOT DROIT : VUE LEGO EN PLAN
+        # INITIALISATION ET PRÉ-RENDU : SUBPLOT DROIT (LEGO)
         # ==========================================================
         plotter.subplot(0, 1)
         plotter.set_background(color="#090d16")
@@ -356,37 +363,45 @@ class EventVisualizer:
         lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
         plotter.add_mesh(lego_floor, color="#1e293b", style="surface", show_edges=True, edge_color="#334155", pickable=False)
         
-        eta_coords = np.array([[-3.0, -3.3, 0.01], [0.0, -3.3, 0.01], [3.0, -3.3, 0.01]])
-        eta_labels = ["eta = -3.0", "eta = 0.0", "eta = +3.0"]
-        plotter.add_point_labels(eta_coords, eta_labels, font_family="courier", font_size=12, show_points=False)
-        
-        eta_axis_line = pv.Line([-3.0, -3.3, 0.01], [3.0, -3.3, 0.01])
-        plotter.add_mesh(eta_axis_line, color="#fb923c", line_width=2, pickable=False)
+        # Étoiles d'axes (Textes statiques)
+        plotter.add_point_labels(np.array([[-3.0, -3.3, 0.01], [0.0, -3.3, 0.01], [3.0, -3.3, 0.01]]), ["eta = -3.0", "eta = 0.0", "eta = +3.0"], font_family="courier", font_size=12, show_points=False)
+        plotter.add_mesh(pv.Line([-3.0, -3.3, 0.01], [3.0, -3.3, 0.01]), color="#fb923c", line_width=2, pickable=False)
+        plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
+        plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color="#fb923c", line_width=2, pickable=False)
 
-        phi_coords = np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]])
-        phi_labels = ["phi = -pi", "phi = 0", "phi = +pi"]
-        plotter.add_point_labels(phi_coords, phi_labels, font_family="courier", font_size=12, show_points=False)
+        # Instanciation unique des meshes Lego (Hauteur initiale 0.001 pour éviter le bug visuel)
+        lego_actors = []
+        lego_mesh_references = []
+        max_heights = []
         
-        phi_axis_line = pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01])
-        plotter.add_mesh(phi_axis_line, color="#fb923c", line_width=2, pickable=False)
+        for jet_geo in jet_geometries:
+            direction = np.array(jet_geo["unit_direction"])
+            eta = jet_geo.get("eta", direction[2] * 1.5)
+            phi = jet_geo.get("phi", np.arctan2(direction[1], direction[0]))
+            pt_energy = jet_geo.get("pt", jet_geo.get("energy", jet_geo["length"] * 10.0))
+            
+            base_box = pv.Box(bounds=[eta - 0.18, eta + 0.18, phi - 0.18, phi + 0.18, 0.0, 1.0])
+            act = plotter.add_mesh(base_box, color="orange", opacity=0.85, show_edges=True, edge_color="white", pickable=False)
+            act.SetVisibility(False)
+            
+            lego_actors.append(act)
+            lego_mesh_references.append((base_box, base_box.points.copy())) # Cache des positions initiales du maillage
+            max_heights.append(pt_energy * 0.08)
 
         plotter.camera_position = [(0.0, -0.01, 9.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
         plotter.camera.zoom(0.72)
 
-        # GESTION CLAVIER (PAUSE)
+        # GESTION CLAVIER
         state = {"is_paused": False}
-        def toggle_pause():
-            state["is_paused"] = not state["is_paused"]
-        plotter.add_key_event('space', toggle_pause)
+        plotter.add_key_event('space', lambda: state.update({"is_paused": not state["is_paused"]}))
 
-        # Lancement de la boucle asynchrone d'affichage
         plotter.show(auto_close=False, interactive_update=True)
 
         max_r = self.detector_muon_r
         current_r = -3.0  
 
         # ==========================================================
-        # 2. MAIN RENDER LOOP
+        # 2. OPTIMIZED RENDER LOOP (Zero memory allocations)
         # ==========================================================
         while plotter.render_window is not None:
             if not hasattr(plotter, 'iren') or plotter.iren is None or plotter.render_window.GetInteractor().GetDone():
@@ -397,156 +412,96 @@ class EventVisualizer:
                 if current_r > max_r + 0.5:
                     current_r = -3.0  
 
-            # --- SUBPLOT GAUCHE ---
+            # ------------------------------------------------------
+            # TRAITEMENT DU SUBPLOT GAUCHE (DÉTECTEUR)
+            # ------------------------------------------------------
             plotter.subplot(0, 0)
             
-            if current_r < 0:
+            if current_r < 0: 
+                # 1. Gestion de la visibilité des acteurs existants
+                beam1_actor.SetVisibility(True)
+                beam2_actor.SetVisibility(True)
+                vertex_actor.SetVisibility(True)
+                vertex_actor.GetProperty().SetColor(pv.Color("gray").float_rgb)
+                
+                # Masquage des objets de collision
+                shockwave_actor.SetVisibility(False)
                 if met_actor_line: met_actor_line.SetVisibility(False)
                 if met_actor_tip: met_actor_tip.SetVisibility(False)
                 
-                for i in range(len(p_paths)):
-                    if f"particle_{i}" in plotter.actors: plotter.remove_actor(f"particle_{i}")
-                for i in range(len(jet_geometries)):
-                    if f"jet_{i}" in plotter.actors: plotter.remove_actor(f"jet_{i}")
-                if "shockwave" in plotter.actors: plotter.remove_actor("shockwave")
+                for act in particle_actors: act.SetVisibility(False)
+                for act in jet_actors: act.SetVisibility(False)
+                for act in lego_actors: act.SetVisibility(False)
                 
-                # Nettoyage à droite
-                plotter.subplot(0, 1)
-                for i in range(len(jet_geometries)):
-                    if f"lego_tower_{i}" in plotter.actors: plotter.remove_actor(f"lego_tower_{i}")
-                plotter.subplot(0, 0)
+                # 2. Mise à jour de la géométrie des faisceaux sans re-création
+                dist = abs(current_r)
+                beam_len = min(1.0, dist * 0.5) 
                 
+                beam1_actor.mapper.dataset.points = np.array([[0.0, 0.0, dist + beam_len], [0.0, 0.0, dist]])
+                beam2_actor.mapper.dataset.points = np.array([[0.0, 0.0, -(dist + beam_len)], [0.0, 0.0, -dist]])
+                
+                # Force la mise à jour GPU
+                beam1_actor.mapper.dataset.Modified()
+                beam2_actor.mapper.dataset.Modified()
+                
+                # 3. Esthétique
                 calorimeter_actor.GetProperty().SetOpacity(0.02)
                 calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
-                
-                z_pos = -current_r
-                beam1 = pv.Line([0, 0, z_pos], [0, 0, max(0, z_pos - 1.0)])
-                beam2 = pv.Line([0, 0, -z_pos], [0, 0, min(0, -z_pos + 1.0)])
-                
-                plotter.add_mesh(beam1, color="#38bdf8", line_width=6, name="beam1", pickable=False)
-                plotter.add_mesh(beam2, color="#38bdf8", line_width=6, name="beam2", pickable=False)
-                
-                vertex = pv.Sphere(radius=0.03, center=(0.0, 0.0, 0.0))
-                plotter.add_mesh(vertex, color="gray", name="vertex", pickable=False)
                 
                 status_txt = "STATUS: PAUSED" if state["is_paused"] else "Status: STEERING PACKETS"
                 hud.SetInput(f"IRIS3D // LHC BEAMS APPROACHING\n-------------------------------------------\n{status_txt}")
                 
-            else:
-                if "beam1" in plotter.actors: plotter.remove_actor("beam1")
-                if "beam2" in plotter.actors: plotter.remove_actor("beam2")
-                
-                if current_r < 0.2:
-                    vertex = pv.Sphere(radius=0.12, center=(0.0, 0.0, 0.0))
-                    plotter.add_mesh(vertex, color="white", name="vertex", pickable=False)
-                else:
-                    vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
-                    plotter.add_mesh(vertex, color="magenta", name="vertex", pickable=False)
+            else: # Phase de Collision (Éclatement)
+                beam1_actor.SetVisibility(False)
+                beam2_actor.SetVisibility(False)
+                vertex_actor.GetProperty().SetColor(pv.Color("white" if current_r < 0.2 else "magenta").float_rgb)
 
+                # Gestion de l'onde de choc calorimétrique par scaling matriciel (Ultra-rapide)
                 if current_r >= self.detector_ecal_r:
-                    opacity_pulse = 0.15 if current_r < self.calorimeter_outer_radius else 0.06
-                    calorimeter_actor.GetProperty().SetOpacity(opacity_pulse)
+                    calorimeter_actor.GetProperty().SetOpacity(0.15 if current_r < self.calorimeter_outer_radius else 0.06)
                     calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("red").float_rgb)
                     
                     if current_r < self.calorimeter_outer_radius + 0.3:
-                        wave_radius = current_r
-                        shockwave = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=wave_radius, height=5.8, resolution=40)
-                        plotter.add_mesh(shockwave, color="orange", opacity=0.25, style="wireframe", line_width=2, name="shockwave", pickable=False)
+                        shockwave_actor.SetVisibility(True)
+                        shockwave_actor.scale = (current_r, current_r, 1.0)
                     else:
-                        if "shockwave" in plotter.actors: plotter.remove_actor("shockwave")
+                        shockwave_actor.SetVisibility(False)
                 else:
                     calorimeter_actor.GetProperty().SetOpacity(0.02)
                     calorimeter_actor.GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
-                    if "shockwave" in plotter.actors: plotter.remove_actor("shockwave")
+                    shockwave_actor.SetVisibility(False)
 
-                # TRACES PARTICULES
-                for i, path in enumerate(p_paths):
-                    mesh_id = f"particle_{i}"
-                    p_charge = p_meta[i]["charge"]
-                    color = self._get_particle_color(p_meta[i]["pid"])
-                    visible_points = self.transformer.get_path_at_time(path, current_r)
+                # Mise à jour des Traces (Masquage de points au lieu de re-calcul de Splines)
+                # Mise à jour des Traces (Correction de la ligne parasite)
+                for i, (poly, full_path) in enumerate(particle_polydata_lists):
+                    actor = particle_actors[i]
+                    distances = np.linalg.norm(full_path, axis=1)
+                    visible_mask = distances <= current_r
                     
-                    if visible_points is not None and len(visible_points) > 0:
-                        visible_points = np.array(visible_points)
-                        
-                        if p_charge != 0 and len(visible_points) > 1:
-                            t_brut = np.linspace(0, 1, len(visible_points))
-                            t_interp = np.linspace(0, 1, 50)
-                            smoothed_points = np.zeros((50, 3))
-                            for coord in range(3):
-                                smoothed_points[:, coord] = np.interp(t_interp, t_brut, visible_points[:, coord])
-                                
-                            sub_mesh = pv.Spline(smoothed_points, n_points=100)
-                            plotter.add_mesh(sub_mesh, color=color, line_width=4, name=mesh_id, pickable=False)
-                        else:
-                            p_start = visible_points[0]
-                            p_end = visible_points[-1]
-                            if np.allclose(p_start, p_end):
-                                p_end = p_start + np.array([1e-5, 0.0, 0.0])
-                                
-                            sub_mesh = pv.Line(p_start, p_end)
-                            plotter.add_mesh(sub_mesh, color=color, line_width=1.5, name=mesh_id, pickable=False)
-                    else:
-                        if mesh_id in plotter.actors: plotter.remove_actor(mesh_id)
-
-                # --- ANIMATION DE MORPHING DES TOURS ---
-                # --- ANIMATION DE MORPHING DES TOURS ---
-                for i, jet_geo in enumerate(jet_geometries):
-                    mesh_id = f"jet_{i}"
-                    lego_id = f"lego_tower_{i}"
+                    # On ne garde que les points déjà passés par le front d'onde
+                    visible_points = full_path[visible_mask]
                     
-                    if current_r >= self.tracker_radius:
-                        # 1. Cône à gauche
-                        plotter.subplot(0, 0)
-                        direction = np.array(jet_geo["unit_direction"])
-                        length, radius = jet_geo["length"], jet_geo["radius"]
-                        jet_cone = pv.Cone(center=direction * (length / 2.0), direction=-direction, height=length, radius=radius, resolution=30)
-                        plotter.add_mesh(jet_cone, color="orange", opacity=min(0.35, (current_r - self.tracker_radius) * 0.2), show_edges=True, edge_color="darkorange", name=mesh_id, pickable=False)
-                        
-                        # 2. Tours Lego à droite
-                        plotter.subplot(0, 1)
-                        max_h = max_heights[i]
-                        
-                        # Calcul linéaire du front d'onde pour l'ECAL
-                        if current_r < self.detector_ecal_r:
-                            target_height = 0.0
-                        else:
-                            growth_range = self.calorimeter_outer_radius - self.detector_ecal_r
-                            progress = (current_r - self.detector_ecal_r) / growth_range
-                            target_height = max_h * min(1.0, max(0.0, progress))
-                        
-                        if target_height > 0.001:
-                            base_mesh = base_lego_meshes[i]
-                            
-                            # CORRECTION ICI : Si l'objet n'existe pas encore, on le pré-morphe à la bonne 
-                            # hauteur initiale pour éviter le flash de taille 1.0
-                            if lego_id not in plotter.actors:
-                                initial_points = base_mesh.points.copy()
-                                initial_points[base_mesh.points[:, 2] > 0.5, 2] = target_height
-                                base_mesh.points = initial_points
-                                
-                                plotter.add_mesh(base_mesh, color="orange", opacity=0.85, show_edges=True, edge_color="white", name=lego_id, pickable=False)
-                            
-                            # Mises à jour pour les frames suivantes
-                            current_mesh = plotter.actors[lego_id].mapper.dataset
-                            animated_points = base_mesh.points.copy()
-                            
-                            # Modification uniquement des sommets hauts
-                            animated_points[base_mesh.points[:, 2] > 0.001, 2] = target_height
-                            
-                            current_mesh.points = animated_points
-                            current_mesh.Modified()
-                        else:
-                            if lego_id in plotter.actors: plotter.remove_actor(lego_id)
+                    if len(visible_points) > 1:
+                        actor.SetVisibility(True)
+                        # On recrée une spline uniquement sur les points visibles.
+                        # Comme on ne touche pas à l'acteur lui-même, ça reste très fluide.
+                        new_spline = pv.Spline(visible_points, n_points=len(visible_points)*2)
+                        # On met à jour la géométrie de l'acteur existant sans le supprimer
+                        actor.mapper.dataset.copy_from(new_spline)
+                        actor.mapper.dataset.Modified()
                     else:
-                        plotter.subplot(0, 0)
-                        if mesh_id in plotter.actors: plotter.remove_actor(mesh_id)
-                        plotter.subplot(0, 1)
-                        if lego_id in plotter.actors: plotter.remove_actor(lego_id)
+                        actor.SetVisibility(False)
 
-                # MET & HUD
-                plotter.subplot(0, 0)
-                if met_data["pt"] > 0.5 and current_r >= self.calorimeter_outer_radius:
+                # Animation de l'opacité des cônes de Jets
+                if current_r >= self.tracker_radius:
+                    for i, act in enumerate(jet_actors):
+                        act.SetVisibility(True)
+                        act.GetProperty().SetOpacity(min(0.35, (current_r - self.tracker_radius) * 0.2))
+                else:
+                    for act in jet_actors: act.SetVisibility(False)
+
+                # Neutrinos / Missing Energy
+                if met_data["pt"] > 0.5 and current_r >= self.calorimeter_outer_radius+1:
                     if met_actor_line: met_actor_line.SetVisibility(True)
                     if met_actor_tip: met_actor_tip.SetVisibility(True)
                 else:
@@ -554,20 +509,37 @@ class EventVisualizer:
                     if met_actor_tip: met_actor_tip.SetVisibility(False)
 
                 state_label = "|| PAUSED" if state["is_paused"] else ('TRACKING CORE' if current_r < self.detector_ecal_r else 'CALORIMETER SHOWER')
-                hud.SetInput(
-                    f"IRIS3D // TIME-OF-FLIGHT SIMULATION ACTIVE\n"
-                    f"-------------------------------------------\n"
-                    f"Wavefront Radius : {current_r:.2f} meters\n"
-                    f"Sub-atomic State : {state_label}"
-                )
+                hud.SetInput(f"IRIS3D // TIME-OF-FLIGHT SIMULATION ACTIVE\n-------------------------------------------\nWavefront Radius : {current_r:.2f} meters\nSub-atomic State : {state_label}")
 
-            # Rendu cadencé (~60 FPS)
-            plotter.update(50, force_redraw=True)
+            # ------------------------------------------------------
+            # TRAITEMENT DU SUBPLOT DROIT (LEGO PLOT)
+            # ------------------------------------------------------
+            if current_r >= self.detector_ecal_r:
+                growth_range = self.calorimeter_outer_radius - self.detector_ecal_r
+                progress = (current_r - self.detector_ecal_r) / growth_range
+                
+                for i, (box_mesh, init_pts) in enumerate(lego_mesh_references):
+                    target_height = max_heights[i] * min(1.0, max(0.0, progress))
+                    
+                    if target_height > 0.001:
+                        lego_actors[i].SetVisibility(True)
+                        # Mutation directe de la matrice de points sans réallocation
+                        new_pts = init_pts.copy()
+                        new_pts[init_pts[:, 2] > 0.001, 2] = target_height
+                        box_mesh.points = new_pts
+                    else:
+                        lego_actors[i].SetVisibility(False)
+            else:
+                for act in lego_actors: act.SetVisibility(False)
+
+            # Rafraîchissement synchrone unique de la fenêtre d'affichage
+            plotter.update(16, force_redraw=True) # Calé sur ~16ms (60 Hz)
             
         try:
             plotter.close()
         except Exception:
             pass
+    
     def _create_lego_tower_mesh2(self, jet_geo, current_r: float = None):
         """
         Calcule la hauteur dynamique et renvoie la géométrie de base ainsi que la hauteur cible.

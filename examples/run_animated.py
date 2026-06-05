@@ -103,7 +103,7 @@ if __name__ == "__main__":
     event_ref = load_event(mock_hep_event)
     
     # Exécution de l'animation (vitesse radiale contrôlée par le paramètre 'speed')
-    visualizer.animate_event(event_ref, p_scale=1.5, j_scale=0.012, speed=0.5)
+    visualizer.animate_event(event_ref, p_scale=1.5, j_scale=0.012, speed=0.1)
     
     # ------------------------------------------------------------
     # DEMO 2 : BATTERIE DE TESTS INTERACTIFS STATIQUES
