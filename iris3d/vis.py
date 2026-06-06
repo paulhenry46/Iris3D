@@ -64,9 +64,29 @@ class EventVisualizer:
     def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8):
         """
         Generates and displays the fluid 3D interactive scene with helical track bending,
-        Missing Transverse Energy (MET) balancing and an advanced HUD Overlay.
+        Missing Transverse Energy (MET) balancing, an advanced HUD Overlay, and a Lego Plot.
         """
-        plotter = pv.Plotter(window_size=[1024, 768], title=f"Iris3D - Run {event.metadata.run_id} Event {event.metadata.event_id}")
+        import numpy as np
+        import pyvista as pv
+
+        # Configuration du mode Split Screen (1 ligne, 2 colonnes)
+        plotter = pv.Plotter(window_size=[1500, 750], shape=(1, 2), title=f"Iris3D - Dual Static Display")
+        
+        # Récupération sécurisée des métadonnées (Correction de l'AttributeError)
+        try:
+            run_id = getattr(event.metadata, "run_id", "N/A")
+            event_id = getattr(event.metadata, "event_id", "N/A")
+        except Exception:
+            try:
+                run_id = event["metadata"]["run_id"]
+                event_id = event["metadata"]["event_id"]
+            except Exception:
+                run_id, event_id = "N/A", "N/A"
+
+        # ----------------------------------------------------------
+        # CONFIGURATION DU SUBPLOT GAUCHE : DÉTECTEUR CYLINDRIQUE
+        # ----------------------------------------------------------
+        plotter.subplot(0, 0)
         plotter.set_background(color="#0f172a")               
         plotter.add_axes()
         plotter.show_grid(color="#273549")                     
@@ -217,10 +237,14 @@ class EventVisualizer:
             plotter.add_mesh(met_mesh, color=color, line_width=5, opacity=1.0, name=f"{mesh_id}_line")
             plotter.add_mesh(met_cone_tip, color=color, opacity=1.0, name=f"{mesh_id}_tip")
 
-        plotter.add_text(
-            "IRIS3D // EVENT DETECTOR HUD ACTIVE\n-----------------------------------\nSelect sub-atomic signature to decode...", 
-            position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner"
+        hud_static_text = (
+            f"IRIS3D // EVENT DETECTOR HUD ACTIVE\n"
+            f"-----------------------------------\n"
+            f"Run ID    : {run_id}\n"
+            f"Event ID  : {event_id}\n\n"
+            f"Select sub-atomic signature to decode..."
         )
+        plotter.add_text(hud_static_text, position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner")
 
         def picking_callback(mesh):
             if mesh and "mesh_id" in mesh.field_data:
@@ -253,6 +277,62 @@ class EventVisualizer:
         plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
         plotter.camera.zoom(0.8)
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
+
+        # ==========================================================
+        # CONFIGURATION DU SUBPLOT DROIT : LEGO PLOT STATIQUE
+        # ==========================================================
+        plotter.subplot(0, 1)
+        plotter.set_background(color="#090d16")
+        plotter.add_text("CALORIMETER METRIC (STATIC LEGO PLOT)", position=(0.05, 0.92), font_size=12, font="courier", color="#fb923c")
+        
+        # Base plane déroulée (eta, phi)
+        lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
+        plotter.add_mesh(lego_floor, color="#1e293b", style="surface", show_edges=True, edge_color="#334155", pickable=False)
+        
+        # Dessin des axes et labels textuels
+        plotter.add_point_labels(np.array([[-3.0, -3.3, 0.01], [0.0, -3.3, 0.01], [3.0, -3.3, 0.01]]), ["eta = -3.0", "eta = 0.0", "eta = +3.0"], font_family="courier", font_size=12, show_points=False)
+        plotter.add_mesh(pv.Line([-3.0, -3.3, 0.01], [3.0, -3.3, 0.01]), color="#fb923c", line_width=2, pickable=False)
+        plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
+        plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color="#fb923c", line_width=2, pickable=False)
+
+        # --- CALCUL D'ÉCHELLE DYNAMIQUE (Évite les barres trop hautes) ---
+        all_energies = []
+        for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
+            try:
+                e = float(event["jets"]["energy"][i])
+            except Exception:
+                try: e = float(event.jets[i].energy)
+                except Exception: e = jet_geo["length"] * 10.0
+            all_energies.append(e)
+            
+        # On définit une hauteur max pour la plus grande tour (ex: 2.5 unités de haut)
+        max_allowed_height = 2.5 
+        max_e = max(all_energies) if len(all_energies) > 0 else 1.0
+        v_scale = max_allowed_height / max_e  # Facteur d'échelle adapté à l'événement
+
+        # Génération des maillages Lego fixes basés sur le nouveau v_scale
+        for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
+            direction = np.array(jet_geo["unit_direction"])
+            eta = jet_geo.get("eta", direction[2] * 1.5)
+            phi = jet_geo.get("phi", np.arctan2(direction[1], direction[0]))
+            
+            j_energy = all_energies[i]
+            final_height = j_energy * v_scale  # Utilisation de l'échelle calculée
+
+            # Génération directe de la boîte
+            lego_tower = pv.Box(bounds=[
+                eta - 0.18, eta + 0.18,
+                phi - 0.18, phi + 0.18,
+                0.0, final_height
+            ])
+            
+            plotter.add_mesh(lego_tower, color="orange", opacity=0.85, show_edges=True, edge_color="white", pickable=False)
+
+        # Orientation optimale de la caméra pour apprécier le relief 3D
+        plotter.camera_position = [(0.0, -5.0, 7.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+        plotter.camera.zoom(0.75)
+
+        # Lancement de l'affichage interactif statique
         plotter.show()
 
     def animate_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8, speed: float = 0.05):
@@ -369,16 +449,30 @@ class EventVisualizer:
         plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
         plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color="#fb923c", line_width=2, pickable=False)
 
-        # Instanciation unique des meshes Lego (Hauteur initiale 0.001 pour éviter le bug visuel)
+      # Instanciation unique des meshes Lego (Hauteur initiale 0.001 pour éviter le bug visuel)
         lego_actors = []
         lego_mesh_references = []
-        max_heights = []
         
+        # 1. Première passe pour collecter les énergies et calculer l'échelle max
+        jet_energies = []
         for jet_geo in jet_geometries:
+            pt_energy = jet_geo.get("pt", jet_geo.get("energy", jet_geo["length"] * 10.0))
+            jet_energies.append(pt_energy)
+            
+        # Hauteur max de la plus grande tour limitée à 2.5 unités
+        max_allowed_height = 2.5
+        max_e = max(jet_energies) if len(jet_energies) > 0 else 1.0
+        v_scale = max_allowed_height / max_e
+        
+        # 2. Seconde passe pour créer les acteurs avec les hauteurs proportionnelles et calibrées
+        max_heights = []
+        for i, jet_geo in enumerate(jet_geometries):
             direction = np.array(jet_geo["unit_direction"])
             eta = jet_geo.get("eta", direction[2] * 1.5)
             phi = jet_geo.get("phi", np.arctan2(direction[1], direction[0]))
-            pt_energy = jet_geo.get("pt", jet_geo.get("energy", jet_geo["length"] * 10.0))
+            
+            # Utilisation de l'énergie collectée
+            pt_energy = jet_energies[i]
             
             base_box = pv.Box(bounds=[eta - 0.18, eta + 0.18, phi - 0.18, phi + 0.18, 0.0, 1.0])
             act = plotter.add_mesh(base_box, color="orange", opacity=0.85, show_edges=True, edge_color="white", pickable=False)
@@ -386,7 +480,9 @@ class EventVisualizer:
             
             lego_actors.append(act)
             lego_mesh_references.append((base_box, base_box.points.copy())) # Cache des positions initiales du maillage
-            max_heights.append(pt_energy * 0.08)
+            
+            # Stockage de la hauteur finale calibrée pour la boucle de morphing
+            max_heights.append(pt_energy * v_scale)
 
         plotter.camera_position = [(0.0, -0.01, 9.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
         plotter.camera.zoom(0.72)
