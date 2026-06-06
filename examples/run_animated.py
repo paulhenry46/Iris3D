@@ -91,7 +91,7 @@ if __name__ == "__main__":
     print("==================================================")
     
     # Instance globale du visualiseur avec les propriétés géométriques centralisées
-    visualizer = EventVisualizer(theme="dark")
+    visualizer = EventVisualizer()
     
     # ------------------------------------------------------------
     # DEMO 1 : NOUVEAU MOTEUR D'ANIMATION (TIME-OF-FLIGHT)

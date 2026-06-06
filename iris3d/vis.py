@@ -3,6 +3,7 @@ import pyvista as pv
 from typing import Optional
 from iris3d.models import CollisionEvent
 from iris3d.core import CoordinateTransformer
+from iris3d.themes import THEMES
 
 class EventVisualizer:
     """
@@ -10,7 +11,7 @@ class EventVisualizer:
     GPU-accelerated 3D canvas using PyVista (VTK), featuring interactive
     picking tooltips, realistic magnetic field bending, and style-coded tracks.
     """
-    def __init__(self, theme: str = "dark"):
+    def __init__(self, theme_name: str = "cyberpunk"):
         self.transformer = CoordinateTransformer()
         self.current_selected_id = None  # Tracker pour l'objet actuellement sélectionné
         self.calorimeter_outer_radius = 2.8
@@ -18,22 +19,22 @@ class EventVisualizer:
         self.detector_muon_r = 4.0
         self.tracker_radius = 1.5
         self.tracker_length = 5.0
+
+        if theme_name not in THEMES:
+            print(f"[Iris3D CORE] Warning: Theme '{theme_name}' not found. Falling back to 'cyberpunk'.")
+            theme_name = "cyberpunk"
         
-        if theme == "dark":
+        # 2. Copie locale du blueprint pour accès direct et ultra-rapide
+        self.theme = THEMES[theme_name]
+
+        if self.theme['dark']:
             pv.set_plot_theme("dark")
             
     def _get_particle_color(self, pid: int) -> str:
         """Assigns professional color-coding based on Particle ID (PDG code)."""
-        abs_pid = abs(pid)
-        if abs_pid == 11:    # Electrons / Positrons
-            return "cyan"
-        elif abs_pid == 13:  # Muons
-            return "lime"
-        elif abs_pid == 22:  # Photons (Neutral)
-            return "yellow"
-        elif abs_pid in (211, 321, 2212): # Charged Hadrons (Pions, Kaons, Protons)
-            return "salmon"
-        return "white"
+        particle_theme = self.theme.get("particles", {})
+        
+        return particle_theme.get(pid, particle_theme.get("default", "#94a3b8"))
 
     def _add_detector_geometry(self, plotter: pv.Plotter):
         """
@@ -45,8 +46,8 @@ class EventVisualizer:
             radius=self.tracker_radius, height=self.tracker_length, resolution=50
         )
         plotter.add_mesh(
-            tracker, color="deepskyblue", opacity=0.08, style="surface",
-            show_edges=True, edge_color="dodgerblue", line_width=1,
+            tracker, color=self.theme["detector_tracker"], opacity=0.08, style="surface",
+            show_edges=True, edge_color=self.theme["detector_tracker_edge"], line_width=1,
             name="detector_tracker", pickable=False
         )
 
@@ -56,8 +57,8 @@ class EventVisualizer:
             radius=self.calorimeter_outer_radius, height=calorimeter_length, resolution=50
         )
         plotter.add_mesh(
-            calorimeter, color="crimson", opacity=0.04, style="surface",
-            show_edges=True, edge_color="firebrick", line_width=1,
+            calorimeter, color=self.theme["detector_ecal"], opacity=0.04, style="surface",
+            show_edges=True, edge_color=self.theme["detector_ecal_edge"], line_width=1,
             name="detector_calorimeter", pickable=False
         )
 
@@ -169,7 +170,7 @@ class EventVisualizer:
             # Toujours cibler l'emplacement d'origine du HUD (à gauche ou affichage seul)
             if mode in ["both", "detector"]:
                 plotter.subplot(0, 0)
-                plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner")
+                plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color=self.theme["hud_text"], name="metadata_banner")
             plotter.render()
 
         # Activation globale unique
@@ -185,32 +186,32 @@ class EventVisualizer:
         import pyvista as pv
 
         plotter.subplot(*subplot_idx)
-        plotter.set_background(color="#0f172a")               
+        plotter.set_background(color=self.theme["bg_detector"])
         plotter.add_axes()
-        plotter.show_grid(color="#273549")                     
+        plotter.show_grid(color=self.theme["grid_color"])                     
         plotter.enable_anti_aliasing("msaa", multi_samples=4)  
         
         # 1. GÉOMÉTRIE DU DÉTECTEUR ET INFRASTRUCTURE DE FOND
         if is_cinematic and ctx is not None:
             # Éléments passifs spécifiques à l'animation
             ctx["calorimeter_mesh"] = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.calorimeter_outer_radius, height=6.0, resolution=50)
-            ctx["calorimeter_actor"] = plotter.add_mesh(ctx["calorimeter_mesh"], color="crimson", opacity=0.02, style="surface", show_edges=True, edge_color="firebrick")
+            ctx["calorimeter_actor"] = plotter.add_mesh(ctx["calorimeter_mesh"], color=self.theme["detector_ecal"], opacity=0.02, style="surface", show_edges=True, edge_color=self.theme["detector_ecal_edge"])
 
             tracker_mesh = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.tracker_radius, height=self.tracker_length, resolution=50)
-            plotter.add_mesh(tracker_mesh, color="deepskyblue", opacity=0.08, style="surface", show_edges=True, edge_color="dodgerblue", pickable=False)
+            plotter.add_mesh(tracker_mesh, color=self.theme["detector_tracker"], opacity=0.08, style="surface", show_edges=True, edge_color=self.theme["detector_tracker_edge"], pickable=False)
 
-            ctx["hud"] = plotter.add_text("IRIS3D // INITIALIZING...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
+            ctx["hud"] = plotter.add_text("IRIS3D // INITIALIZING...", position=(0.02, 0.85), font_size=11, font="courier", color=self.theme["hud_text"])
 
             beam1 = pv.Line([0, 0, 5.0], [0, 0, 0.0])
             beam2 = pv.Line([0, 0, -5.0], [0, 0, 0.0])
-            ctx["beam1_actor"] = plotter.add_mesh(beam1, color="#38bdf8", line_width=6, pickable=False)
-            ctx["beam2_actor"] = plotter.add_mesh(beam2, color="#38bdf8", line_width=6, pickable=False)
+            ctx["beam1_actor"] = plotter.add_mesh(beam1, color=self.theme["beam"], line_width=6, pickable=False)
+            ctx["beam2_actor"] = plotter.add_mesh(beam2, color=self.theme["beam"], line_width=6, pickable=False)
             
             vertex_mesh = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
-            ctx["vertex_actor"] = plotter.add_mesh(vertex_mesh, color="gray", pickable=False)
+            ctx["vertex_actor"] = plotter.add_mesh(vertex_mesh, color=self.theme["vertex_anim"], pickable=False)
 
             shockwave_base = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=1.0, height=5.8, resolution=40)
-            ctx["shockwave_actor"] = plotter.add_mesh(shockwave_base, color="orange", opacity=0.0, style="wireframe", line_width=2, pickable=False)
+            ctx["shockwave_actor"] = plotter.add_mesh(shockwave_base, color=self.theme["shockwave"], opacity=0.0, style="wireframe", line_width=2, pickable=False)
 
             ctx["particle_actors"] = []
             ctx["particle_polydata_lists"] = []
@@ -219,7 +220,7 @@ class EventVisualizer:
             # Mode statique : Géométrie simplifiée par défaut
             self._add_detector_geometry(plotter)
             vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
-            plotter.add_mesh(vertex, color="magenta", render_points_as_spheres=True, label="Interaction Vertex")
+            plotter.add_mesh(vertex, color=self.theme["vertex_static"], render_points_as_spheres=True, label="Interaction Vertex")
 
         p_meta = spatial_data["particle_metadata"]
         p_paths = spatial_data["particle_paths"]
@@ -311,7 +312,7 @@ class EventVisualizer:
             jet_cone.field_data["mesh_id"] = [mesh_id]
             
             initial_opacity = 0.0 if is_cinematic else 0.35
-            act = plotter.add_mesh(jet_cone, color="orange", opacity=initial_opacity, show_edges=True, edge_color="darkorange", name=mesh_id)
+            act = plotter.add_mesh(jet_cone, color=self.theme["jet_cone"], opacity=initial_opacity, show_edges=True, edge_color=self.theme["jet_cone_edge"], name=mesh_id)
             
             if is_cinematic and ctx is not None:
                 ctx["jet_actors"].append(act)
@@ -348,8 +349,8 @@ class EventVisualizer:
             met_mesh.field_data["mesh_id"] = [mesh_id]
             met_cone_tip.field_data["mesh_id"] = [mesh_id]
             
-            act_line = plotter.add_mesh(met_mesh, color="red", line_width=5, opacity=1.0, name=f"{mesh_id}_line")
-            act_tip = plotter.add_mesh(met_cone_tip, color="red", opacity=1.0, name=f"{mesh_id}_tip")
+            act_line = plotter.add_mesh(met_mesh, color=self.theme["met"], line_width=5, opacity=1.0, name=f"{mesh_id}_line")
+            act_tip = plotter.add_mesh(met_cone_tip, color=self.theme["met"], opacity=1.0, name=f"{mesh_id}_tip")
             
             if is_cinematic and ctx is not None:
                 act_line.SetVisibility(False)
@@ -363,7 +364,7 @@ class EventVisualizer:
         if not is_cinematic:
             plotter.add_text(
                 f"IRIS3D // EVENT DETECTOR HUD ACTIVE\n-----------------------------------\nRun ID : {run_id} | Event ID : {event_id}\n\nSelect sub-atomic signature to decode...", 
-                position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner"
+                position="upper_left", font_size=11, font="courier", color=self.theme["hud_text"], name="metadata_banner"
             )
             plotter.add_legend(bcolor=None, face="circle")
             
@@ -610,19 +611,19 @@ class EventVisualizer:
         import pyvista as pv
 
         plotter.subplot(*subplot_idx)
-        plotter.set_background(color="#090d16")
+        plotter.set_background(color=self.theme["bg_detector"])
         
         title_type = "LEGO PLOT" if is_cinematic else "STATIC LEGO PLOT"
-        plotter.add_text(f"CALORIMETER METRIC ({title_type})", position=(0.05, 0.92), font_size=12, font="courier", color="#fb923c")
+        plotter.add_text(f"CALORIMETER METRIC ({title_type})", position=(0.05, 0.92), font_size=12, font="courier", color=self.theme["lego_title"])
         
         # 1. RENDU DE L'ENVIRONNEMENT ET DES AXES (Commun)
         lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
-        plotter.add_mesh(lego_floor, color="#1e293b", style="surface", show_edges=True, edge_color="#334155", pickable=False)
+        plotter.add_mesh(lego_floor, color=self.theme["lego_floor"], style="surface", show_edges=True, edge_color=self.theme["lego_floor_edge"], pickable=False)
         
         plotter.add_point_labels(np.array([[-3.0, -3.3, 0.01], [0.0, -3.3, 0.01], [3.0, -3.3, 0.01]]), ["eta = -3.0", "eta = 0.0", "eta = +3.0"], font_family="courier", font_size=12, show_points=False)
-        plotter.add_mesh(pv.Line([-3.0, -3.3, 0.01], [3.0, -3.3, 0.01]), color="#fb923c", line_width=2, pickable=False)
+        plotter.add_mesh(pv.Line([-3.0, -3.3, 0.01], [3.0, -3.3, 0.01]), color=self.theme["lego_title"], line_width=2, pickable=False)
         plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
-        plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color="#fb923c", line_width=2, pickable=False)
+        plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color=self.theme["lego_title"], line_width=2, pickable=False)
 
         # 2. COLLECTE DES ÉNERGIES ET NORMALISATION DE L'ÉCHELLE (Commun)
         jet_geometries = spatial_data.get("jet_geometries", [])
@@ -666,7 +667,7 @@ class EventVisualizer:
                 self.tooltip_dict[mesh_id] = (f">> INSPECTING RECONSTRUCTED JET #{i}\n Transverse E : {pt_energy:.2f} GeV", "orange")
 
             # Ajout au plotter
-            act = plotter.add_mesh(lego_box, color="orange", opacity=0.85, show_edges=True, edge_color="white", name=f"lego_tower_{i}")
+            act = plotter.add_mesh(lego_box, color=self.theme["jet_tower"], opacity=0.85, show_edges=True, edge_color=self.theme["jet_tower_edge"], name=f"lego_tower_{i}")
             
             # Application de la logique spécifique au mode
             if is_cinematic and ctx is not None:

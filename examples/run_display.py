@@ -113,12 +113,12 @@ if __name__ == "__main__":
     event = load_event(mock_hep_event)
     
     print("Initializing fluid PyVista 3D event viewer...")
-    visualizer = EventVisualizer(theme="dark")
+    visualizer = EventVisualizer()
     
     # Fire up the graphics layer!
     visualizer.plot_event(event, p_scale=2.2, j_scale=0.012)
 
-    visualizer = EventVisualizer(theme="dark")
+    visualizer = EventVisualizer()
 
     # TEST 1 : Vérifie les hélices extrêmes
     print("Rendering Extreme pT Event...")
