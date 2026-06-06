@@ -108,12 +108,13 @@ class EventVisualizer:
 
         # 5. Remplissage des Subplots selon la configuration
         if mode == "both":
-            self._plot_3d_detector(plotter, spatial_data, event, run_id, event_id, subplot_idx=(0, 0))
-            self._plot_lego_calorimeter(plotter, spatial_data, event, subplot_idx=(0, 1))
+            self._plot_3d_detector(plotter, spatial_data, event=event, run_id=run_id, event_id=event_id, is_cinematic=False, subplot_idx=(0, 0))
+            
+            self._plot_lego_calorimeter(plotter, spatial_data, event=event, is_cinematic=False, subplot_idx=(0, 1))
         elif mode == "detector":
-            self._plot_3d_detector(plotter, spatial_data, event, run_id, event_id, subplot_idx=(0, 0))
+            self._plot_3d_detector(plotter, spatial_data, event=event, run_id=run_id, event_id=event_id, is_cinematic=False, subplot_idx=(0, 0))
         elif mode == "lego":
-            self._plot_lego_calorimeter(plotter, spatial_data, event, subplot_idx=(0, 0))
+            self._plot_lego_calorimeter(plotter, spatial_data, event=event, is_cinematic=False, subplot_idx=(0, 1))
 
         # 6. Injection de la logique de picking unifiée
         def picking_callback(mesh):
@@ -175,8 +176,11 @@ class EventVisualizer:
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         plotter.show()
     
-    def _plot_3d_detector(self, plotter, spatial_data, event, run_id, event_id, subplot_idx=(0, 0)):
-        """Draws the central tracking system and geometric outputs."""
+    def _plot_3d_detector(self, plotter, spatial_data, event=None, run_id="N/A", event_id="N/A", ctx=None, is_cinematic: bool = False, subplot_idx=(0, 0)):
+        """
+        Unified method to draw the central 3D tracking system and geometric signatures,
+        supporting both static exploration and high-performance cinematic simulation contexts.
+        """
         import numpy as np
         import pyvista as pv
 
@@ -186,15 +190,41 @@ class EventVisualizer:
         plotter.show_grid(color="#273549")                     
         plotter.enable_anti_aliasing("msaa", multi_samples=4)  
         
-        self._add_detector_geometry(plotter)
-        
-        vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
-        plotter.add_mesh(vertex, color="magenta", render_points_as_spheres=True, label="Interaction Vertex")
-        
+        # 1. GÉOMÉTRIE DU DÉTECTEUR ET INFRASTRUCTURE DE FOND
+        if is_cinematic and ctx is not None:
+            # Éléments passifs spécifiques à l'animation
+            ctx["calorimeter_mesh"] = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.calorimeter_outer_radius, height=6.0, resolution=50)
+            ctx["calorimeter_actor"] = plotter.add_mesh(ctx["calorimeter_mesh"], color="crimson", opacity=0.02, style="surface", show_edges=True, edge_color="firebrick")
+
+            tracker_mesh = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.tracker_radius, height=self.tracker_length, resolution=50)
+            plotter.add_mesh(tracker_mesh, color="deepskyblue", opacity=0.08, style="surface", show_edges=True, edge_color="dodgerblue", pickable=False)
+
+            ctx["hud"] = plotter.add_text("IRIS3D // INITIALIZING...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
+
+            beam1 = pv.Line([0, 0, 5.0], [0, 0, 0.0])
+            beam2 = pv.Line([0, 0, -5.0], [0, 0, 0.0])
+            ctx["beam1_actor"] = plotter.add_mesh(beam1, color="#38bdf8", line_width=6, pickable=False)
+            ctx["beam2_actor"] = plotter.add_mesh(beam2, color="#38bdf8", line_width=6, pickable=False)
+            
+            vertex_mesh = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
+            ctx["vertex_actor"] = plotter.add_mesh(vertex_mesh, color="gray", pickable=False)
+
+            shockwave_base = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=1.0, height=5.8, resolution=40)
+            ctx["shockwave_actor"] = plotter.add_mesh(shockwave_base, color="orange", opacity=0.0, style="wireframe", line_width=2, pickable=False)
+
+            ctx["particle_actors"] = []
+            ctx["particle_polydata_lists"] = []
+            ctx["jet_actors"] = []
+        else:
+            # Mode statique : Géométrie simplifiée par défaut
+            self._add_detector_geometry(plotter)
+            vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
+            plotter.add_mesh(vertex, color="magenta", render_points_as_spheres=True, label="Interaction Vertex")
+
         p_meta = spatial_data["particle_metadata"]
         p_paths = spatial_data["particle_paths"]
 
-        # Traces
+        # 2. RENDU ET ALLOCATION DES TRACES DE PARTICULES
         for i in range(len(p_paths)):
             points = p_paths[i]
             metadata = p_meta[i]
@@ -202,22 +232,24 @@ class EventVisualizer:
             p_pid = metadata.get("pid", 0)
             p_charge = metadata.get("charge", 0)
             
+            # Parsing sécurisé des propriétés cinématiques
             try:
-                source_particle = event.particles[i]
+                source_particle = event.particles[i] if event else None
                 pt_val, eta_val, phi_val = source_particle.pt, source_particle.eta, source_particle.phi
             except Exception:
                 try:
-                    pt_val = float(event["particles"]["pt"][i])
-                    eta_val = float(event["particles"]["eta"][i])
-                    phi_val = float(event["particles"]["phi"][i])
+                    pt_val = float(event["particles"]["pt"][i]) if event else 0.0
+                    eta_val = float(event["particles"]["eta"][i]) if event else 0.0
+                    phi_val = float(event["particles"]["phi"][i]) if event else 0.0
                 except Exception:
                     pt_val, eta_val, phi_val = 0.0, 0.0, 0.0
             
+            # Génération du Mesh topologique de la trace
             if p_charge != 0:
                 track_mesh = pv.Spline(points, len(points))
             else:
                 track_mesh = pv.PolyData(points)
-                if p_pid == 22:  
+                if p_pid == 22:  # Photons (Ligne pointillée via connectivité segmentée)
                     lines_connectivity = []
                     for idx in range(0, len(points) - 1, 2):
                         lines_connectivity.extend([2, idx, idx + 1])
@@ -229,20 +261,28 @@ class EventVisualizer:
             color = self._get_particle_color(p_pid)
             mesh_id = f"particle_{i}"
             
+            # Enregistrement des chaînes HUD dans le registre d'infobulles
             self.tooltip_dict[mesh_id] = ((
                 f">> INSPECTING TARGET: PARTICLE TRACK #{i}\n----------------------------------------\n"
                 f" Identity    : {p_name} (PDG: {p_pid})\n Momentum pT : {pt_val:.2f} GeV\n"
                 f" Pseudo-Rap  : {eta_val:.2f}\n Azimuth phi : {phi_val:.2f} rad\n Charge      : {p_charge:+.0f}"
             ), color)
-            
             track_mesh.field_data["mesh_id"] = [mesh_id]
-            if p_charge == 0:
-                act = plotter.add_mesh(track_mesh, color=color, line_width=2.5 if p_pid == 22 else 1, opacity=0.9 if p_pid == 22 else 0.5, name=mesh_id)
-            else:
-                act = plotter.add_mesh(track_mesh, color=color, line_width=4, opacity=1.0, name=mesh_id)
+            
+            # Paramètres d'affichage sélectifs
+            lw = 4 if p_charge != 0 else (2.5 if p_pid == 22 else 1.5)
+            op = 1.0 if p_charge != 0 else (0.9 if p_pid == 22 else 0.5)
+            
+            act = plotter.add_mesh(track_mesh, color=color, line_width=lw, opacity=op, name=mesh_id)
+            
+            if is_cinematic and ctx is not None:
+                act.SetVisibility(False)
+                ctx["particle_actors"].append(act)
+                ctx["particle_polydata_lists"].append((track_mesh, np.array(points)))
+                
             self._actor_registry["particles"][i] = act
 
-        # Cônes de jets
+        # 3. RENDU DES CÔNES DE JETS
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
             direction = np.array(jet_geo["unit_direction"])
             length, radius = jet_geo["length"], jet_geo["radius"]
@@ -251,14 +291,14 @@ class EventVisualizer:
             jet_cone = pv.Cone(center=cone_center, direction=-direction, height=length, radius=radius, resolution=30)
             
             try:
-                source_jet = event.jets[i]
+                source_jet = event.jets[i] if event else None
                 j_energy, j_eta, j_phi, j_dr = source_jet.energy, source_jet.eta, source_jet.phi, source_jet.delta_r
             except Exception:
                 try:
-                    j_energy = float(event["jets"]["energy"][i])
-                    j_eta = float(event["jets"]["eta"][i])
-                    j_phi = float(event["jets"]["phi"][i])
-                    j_dr = float(event["jets"]["delta_r"][i])
+                    j_energy = float(event["jets"]["energy"][i]) if event else 0.0
+                    j_eta = float(event["jets"]["eta"][i]) if event else 0.0
+                    j_phi = float(event["jets"]["phi"][i]) if event else 0.0
+                    j_dr = float(event["jets"]["delta_r"][i]) if event else 0.4
                 except Exception:
                     j_energy, j_eta, j_phi, j_dr = 0.0, 0.0, 0.0, 0.4
             
@@ -268,13 +308,23 @@ class EventVisualizer:
                 f" Transverse E : {j_energy:.2f} GeV\n Pseudo-Rap   : {j_eta:.2f}\n"
                 f" Azimuth phi  : {j_phi:.2f} rad\n Cone Radius  : {j_dr:.2f} (delta_R)"
             ), "orange")
-            
             jet_cone.field_data["mesh_id"] = [mesh_id]
-            act = plotter.add_mesh(jet_cone, color="orange", opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id)
+            
+            initial_opacity = 0.0 if is_cinematic else 0.35
+            act = plotter.add_mesh(jet_cone, color="orange", opacity=initial_opacity, show_edges=True, edge_color="darkorange", name=mesh_id)
+            
+            if is_cinematic and ctx is not None:
+                ctx["jet_actors"].append(act)
             self._actor_registry["jet_cones"][i] = act
 
-        # Missing Energy (MET)
+        # 4. RENDU DE L'ÉNERGIE MANQUANTE (MET)
         met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
+        
+        # Initialisation sécurisée des variables locales pour l'animation
+        if is_cinematic and ctx is not None:
+            ctx["met_actor_line"] = None
+            ctx["met_actor_tip"] = None
+        
         if met_data["pt"] > 0.5:
             met_vector = np.array(met_data["vector"])
             met_points = np.linspace(np.array([0.0, 0.0, 0.0]), met_vector, 30)
@@ -300,69 +350,26 @@ class EventVisualizer:
             
             act_line = plotter.add_mesh(met_mesh, color="red", line_width=5, opacity=1.0, name=f"{mesh_id}_line")
             act_tip = plotter.add_mesh(met_cone_tip, color="red", opacity=1.0, name=f"{mesh_id}_tip")
+            
+            if is_cinematic and ctx is not None:
+                act_line.SetVisibility(False)
+                act_tip.SetVisibility(False)
+                ctx["met_actor_line"] = act_line
+                ctx["met_actor_tip"] = act_tip
+                
             self._actor_registry["met"] = {"line": act_line, "tip": act_tip}
 
-        # Injection HUD texte
-        plotter.add_text(
-            f"IRIS3D // EVENT DETECTOR HUD ACTIVE\n-----------------------------------\nRun ID : {run_id} | Event ID : {event_id}\n\nSelect sub-atomic signature to decode...", 
-            position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner"
-        )
-        plotter.add_legend(bcolor=None, face="circle")
+        # 5. RAFFRAÎCHISSEMENT INTERFACE ET TEXTES HUD
+        if not is_cinematic:
+            plotter.add_text(
+                f"IRIS3D // EVENT DETECTOR HUD ACTIVE\n-----------------------------------\nRun ID : {run_id} | Event ID : {event_id}\n\nSelect sub-atomic signature to decode...", 
+                position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner"
+            )
+            plotter.add_legend(bcolor=None, face="circle")
+            
         plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
         plotter.camera.zoom(0.8)
-
-
-    def _plot_lego_calorimeter(self, plotter, spatial_data, event, subplot_idx=(0, 1)):
-        """Draws the static 2D plane unfold calorimeter towers."""
-        import numpy as np
-        import pyvista as pv
-
-        plotter.subplot(*subplot_idx)
-        plotter.set_background(color="#090d16")
-        plotter.add_text("CALORIMETER METRIC (STATIC LEGO PLOT)", position=(0.05, 0.92), font_size=12, font="courier", color="#fb923c")
-        
-        # Sol cylindrique déroulé
-        lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
-        plotter.add_mesh(lego_floor, color="#1e293b", style="surface", show_edges=True, edge_color="#334155", pickable=False)
-        
-        # Marquages d'axes
-        plotter.add_point_labels(np.array([[-3.0, -3.3, 0.01], [0.0, -3.3, 0.01], [3.0, -3.3, 0.01]]), ["eta = -3.0", "eta = 0.0", "eta = +3.0"], font_family="courier", font_size=12, show_points=False)
-        plotter.add_mesh(pv.Line([-3.0, -3.3, 0.01], [3.0, -3.3, 0.01]), color="#fb923c", line_width=2, pickable=False)
-        plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
-        plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color="#fb923c", line_width=2, pickable=False)
-
-        # Calcul de normalisation adaptative de la hauteur
-        all_energies = []
-        for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
-            try:
-                j_energy = float(event["jets"]["energy"][i])
-            except Exception:
-                try: j_energy = event.jets[i].energy
-                except Exception: j_energy = jet_geo["length"] * 10.0
-            all_energies.append(j_energy)
-            
-        max_allowed_height = 2.5 
-        max_e = max(all_energies) if len(all_energies) > 0 else 1.0
-        v_scale = max_allowed_height / max_e  
-
-        # Instanciation des boîtes LEGO et liaison d'ID pour le picking synchrone
-        for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
-            direction = np.array(jet_geo["unit_direction"])
-            eta = jet_geo.get("eta", direction[2] * 1.5)
-            phi = jet_geo.get("phi", np.arctan2(direction[1], direction[0]))
-            final_height = all_energies[i] * v_scale  
-
-            lego_tower = pv.Box(bounds=[eta - 0.18, eta + 0.18, phi - 0.18, phi + 0.18, 0.0, final_height])
-            mesh_id = f"jet_{i}"
-            lego_tower.field_data["mesh_id"] = [mesh_id]
-            
-            act = plotter.add_mesh(lego_tower, color="orange", opacity=0.85, show_edges=True, edge_color="white", name=f"lego_tower_{i}")
-            self._actor_registry["jet_towers"][i] = act
-
-        # Positionnement de la vue
-        plotter.camera_position = [(0.0, -5.0, 7.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
-        plotter.camera.zoom(0.75)
-
+    
     def animate_event(self, event: CollisionEvent, mode: str = "both", p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8, speed: float = 0.05):
         """
         Orchestrates the high-performance cinematic animation display.
@@ -402,12 +409,12 @@ class EventVisualizer:
 
         # 2. Routage et initialisation des subplots
         if mode == "both":
-            self._prepare_cinematic_detector(plotter, spatial_data, ctx, subplot_idx=(0, 0))
-            self._prepare_cinematic_calorimeter(plotter, spatial_data, ctx, subplot_idx=(0, 1))
+            self._plot_3d_detector(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 0))
+            self._plot_lego_calorimeter(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 1))
         elif mode == "detector":
-            self._prepare_cinematic_detector(plotter, spatial_data, ctx, subplot_idx=(0, 0))
+            self._plot_3d_detector(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 0))
         elif mode == "lego":
-            self._prepare_cinematic_calorimeter(plotter, spatial_data, ctx, subplot_idx=(0, 0))
+            self._plot_lego_calorimeter(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 1))
 
         # Gestion de l'état du clavier
         state = {"is_paused": False}
@@ -594,114 +601,21 @@ class EventVisualizer:
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         plotter.show()
 
-    def _prepare_cinematic_detector(self, plotter, spatial_data, ctx, subplot_idx=(0, 0)):
-        """Pre-allocates resources and registers metadata for the 3D Tracking detector view."""
-        import numpy as np
-        import pyvista as pv
-
-        plotter.subplot(*subplot_idx)
-        plotter.set_background(color="#0f172a")
-        plotter.add_axes()
-        plotter.show_grid(color="#273549")
-        
-        ctx["calorimeter_mesh"] = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.calorimeter_outer_radius, height=6.0, resolution=50)
-        ctx["calorimeter_actor"] = plotter.add_mesh(ctx["calorimeter_mesh"], color="crimson", opacity=0.02, style="surface", show_edges=True, edge_color="firebrick")
-
-        tracker_mesh = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.tracker_radius, height=self.tracker_length, resolution=50)
-        plotter.add_mesh(tracker_mesh, color="deepskyblue", opacity=0.08, style="surface", show_edges=True, edge_color="dodgerblue", pickable=False)
-
-        ctx["hud"] = plotter.add_text("IRIS3D // INITIALIZING...", position=(0.02, 0.85), font_size=11, font="courier", color="#38bdf8")
-
-        beam1 = pv.Line([0, 0, 5.0], [0, 0, 0.0])
-        beam2 = pv.Line([0, 0, -5.0], [0, 0, 0.0])
-        ctx["beam1_actor"] = plotter.add_mesh(beam1, color="#38bdf8", line_width=6, pickable=False)
-        ctx["beam2_actor"] = plotter.add_mesh(beam2, color="#38bdf8", line_width=6, pickable=False)
-        
-        vertex_mesh = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
-        ctx["vertex_actor"] = plotter.add_mesh(vertex_mesh, color="gray", pickable=False)
-
-        shockwave_base = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=1.0, height=5.8, resolution=40)
-        ctx["shockwave_actor"] = plotter.add_mesh(shockwave_base, color="orange", opacity=0.0, style="wireframe", line_width=2, pickable=False)
-
-        ctx["particle_actors"] = []
-        ctx["particle_polydata_lists"] = []
-        
-        p_paths = spatial_data["particle_paths"]
-        p_meta = spatial_data["particle_metadata"]
-
-        for i, path in enumerate(p_paths):
-            color = self._get_particle_color(p_meta[i]["pid"])
-            full_path = np.array(path)
-            poly = pv.PolyData(full_path)
-            
-            cells = np.full((len(full_path)-1, 3), 2, dtype=np.int_)
-            cells[:, 1] = np.arange(0, len(full_path)-1)
-            cells[:, 2] = np.arange(1, len(full_path))
-            poly.lines = cells
-            
-            # Injection ID picking
-            mesh_id = f"particle_{i}"
-            poly.field_data["mesh_id"] = [mesh_id]
-            self.tooltip_dict[mesh_id] = ((
-                f">> INSPECTING TARGET: PARTICLE TRACK #{i}\n----------------------------------------\n"
-                f" Identity    : {p_meta[i].get('name', f'Track {i}')} (PDG: {p_meta[i].get('pid', 0)})\n Charge      : {p_meta[i].get('charge', 0):+.0f}"
-            ), color)
-
-            lw = 4 if p_meta[i]["charge"] != 0 else 1.5
-            act = plotter.add_mesh(poly, color=color, line_width=lw, name=mesh_id)
-            act.SetVisibility(False)
-            
-            ctx["particle_actors"].append(act)
-            ctx["particle_polydata_lists"].append((poly, full_path))
-            self._actor_registry["particles"][i] = act
-
-        ctx["jet_actors"] = []
-        for i, jet_geo in enumerate(spatial_data.get("jet_geometries", [])):
-            direction = np.array(jet_geo["unit_direction"])
-            length, radius = jet_geo["length"], jet_geo["radius"]
-            jet_cone = pv.Cone(center=direction * (length / 2.0), direction=-direction, height=length, radius=radius, resolution=30)
-            
-            mesh_id = f"jet_{i}"
-            jet_cone.field_data["mesh_id"] = [mesh_id]
-            # Les données textuelles complètes seront récupérées ou injectées de manière croisée
-            if mesh_id not in self.tooltip_dict:
-                self.tooltip_dict[mesh_id] = (f">> INSPECTING RECONSTRUCTED JET #{i}", "orange")
-
-            act = plotter.add_mesh(jet_cone, color="orange", opacity=0.0, show_edges=True, edge_color="darkorange", name=mesh_id)
-            ctx["jet_actors"].append(act)
-            self._actor_registry["jet_cones"][i] = act
-
-        ctx["met_actor_line"], ctx["met_actor_tip"] = None, None
-        met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
-        if met_data["pt"] > 0.5:
-            met_vector = np.array(met_data["vector"])
-            met_mesh_line = pv.Line([0, 0, 0], met_vector)
-            
-            mesh_id = "missing_energy_vector"
-            met_mesh_line.field_data["mesh_id"] = [mesh_id]
-            self.tooltip_dict[mesh_id] = (f">> WARNING: MISSING TRANSVERSE ENERGY DETECTED\n Unseen pT : {met_data['pt']:.2f} GeV", "red")
-
-            ctx["met_actor_line"] = plotter.add_mesh(met_mesh_line, color="red", line_width=5, name=f"{mesh_id}_line")
-            ctx["met_actor_line"].SetVisibility(False)
-            
-            met_cone = pv.Cone(center=met_vector, direction=met_vector/np.linalg.norm(met_vector), height=0.5, radius=0.25, resolution=60)
-            met_cone.field_data["mesh_id"] = [mesh_id]
-            ctx["met_actor_tip"] = plotter.add_mesh(met_cone, color="red", name=f"{mesh_id}_tip")
-            ctx["met_actor_tip"].SetVisibility(False)
-            self._actor_registry["met"] = {"line": ctx["met_actor_line"], "tip": ctx["met_actor_tip"]}
-
-        plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
-        plotter.camera.zoom(0.8)
-
-    def _prepare_cinematic_calorimeter(self, plotter, spatial_data, ctx, subplot_idx=(0, 1)):
-        """Pre-allocates resource geometries for the static plane unfold Lego view."""
+    def _plot_lego_calorimeter(self, plotter, spatial_data, event=None, ctx=None, is_cinematic: bool = False, subplot_idx=(0, 1)):
+        """
+        Unified method to draw the calorimeter Lego view, supporting both static 
+        and high-performance dynamic morphing displays.
+        """
         import numpy as np
         import pyvista as pv
 
         plotter.subplot(*subplot_idx)
         plotter.set_background(color="#090d16")
-        plotter.add_text("CALORIMETER METRIC (LEGO PLOT)", position=(0.05, 0.92), font_size=12, font="courier", color="#fb923c")
         
+        title_type = "LEGO PLOT" if is_cinematic else "STATIC LEGO PLOT"
+        plotter.add_text(f"CALORIMETER METRIC ({title_type})", position=(0.05, 0.92), font_size=12, font="courier", color="#fb923c")
+        
+        # 1. RENDU DE L'ENVIRONNEMENT ET DES AXES (Commun)
         lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
         plotter.add_mesh(lego_floor, color="#1e293b", style="surface", show_edges=True, edge_color="#334155", pickable=False)
         
@@ -710,38 +624,63 @@ class EventVisualizer:
         plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
         plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color="#fb923c", line_width=2, pickable=False)
 
+        # 2. COLLECTE DES ÉNERGIES ET NORMALISATION DE L'ÉCHELLE (Commun)
         jet_geometries = spatial_data.get("jet_geometries", [])
         jet_energies = []
-        for jet_geo in jet_geometries:
-            pt_energy = jet_geo.get("pt", jet_geo.get("energy", jet_geo["length"] * 10.0))
-            jet_energies.append(pt_energy)
+        for i, jet_geo in enumerate(jet_geometries):
+            try:
+                # Priorité au format Event dict/object, sinon fallback géométrique
+                j_energy = float(event["jets"]["energy"][i]) if event else jet_geo.get("pt", jet_geo.get("energy"))
+            except Exception:
+                try: j_energy = event.jets[i].energy if event else jet_geo["length"] * 10.0
+                except Exception: j_energy = jet_geo["length"] * 10.0
+            jet_energies.append(j_energy)
             
-        max_allowed_height = 2.5
+        max_allowed_height = 2.5 
         max_e = max(jet_energies) if len(jet_energies) > 0 else 1.0
-        v_scale = max_allowed_height / max_e
-        
-        ctx["lego_mesh_references"] = []
-        ctx["max_heights"] = []
-        
+        v_scale = max_allowed_height / max_e  
+
+        # Initialisation des listes du contexte si mode cinématique actif
+        if is_cinematic and ctx is not None:
+            ctx["lego_mesh_references"] = []
+            ctx["max_heights"] = []
+
+        # 3. CONSTRUCTION DES TOURS LEGO
         for i, jet_geo in enumerate(jet_geometries):
             direction = np.array(jet_geo["unit_direction"])
             eta = jet_geo.get("eta", direction[2] * 1.5)
             phi = jet_geo.get("phi", np.arctan2(direction[1], direction[0]))
-            pt_energy = jet_energies[i]
             
-            base_box = pv.Box(bounds=[eta - 0.18, eta + 0.18, phi - 0.18, phi + 0.18, 0.0, 1.0])
+            pt_energy = jet_energies[i]
+            final_height = pt_energy * v_scale  
+
+            # Détermination de la géométrie de départ selon le mode
+            current_height = 1.0 if is_cinematic else final_height
+            lego_box = pv.Box(bounds=[eta - 0.18, eta + 0.18, phi - 0.18, phi + 0.18, 0.0, current_height])
             
             mesh_id = f"jet_{i}"
-            base_box.field_data["mesh_id"] = [mesh_id]
+            lego_box.field_data["mesh_id"] = [mesh_id]
+            
+            # Injection sécurisée dans le dictionnaire de tooltips globaux
             if mesh_id not in self.tooltip_dict:
                 self.tooltip_dict[mesh_id] = (f">> INSPECTING RECONSTRUCTED JET #{i}\n Transverse E : {pt_energy:.2f} GeV", "orange")
 
-            act = plotter.add_mesh(base_box, color="orange", opacity=0.85, show_edges=True, edge_color="white", name=f"lego_tower_{i}")
-            act.SetVisibility(False)
+            # Ajout au plotter
+            act = plotter.add_mesh(lego_box, color="orange", opacity=0.85, show_edges=True, edge_color="white", name=f"lego_tower_{i}")
             
-            ctx["lego_mesh_references"].append((base_box, base_box.points.copy()))
-            ctx["max_heights"].append(pt_energy * v_scale)
+            # Application de la logique spécifique au mode
+            if is_cinematic and ctx is not None:
+                act.SetVisibility(False)
+                ctx["lego_mesh_references"].append((lego_box, lego_box.points.copy()))
+                ctx["max_heights"].append(final_height)
+            
+            # Enregistrement dans le registre central (Crucial pour la synchro)
             self._actor_registry["jet_towers"][i] = act
 
-        plotter.camera_position = [(0.0, -0.01, 9.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
-        plotter.camera.zoom(0.72)
+        # 4. CADRAGE CAMÉRA ADJUSTÉ SELON LE MODE
+        if is_cinematic:
+            plotter.camera_position = [(0.0, -0.01, 9.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+            plotter.camera.zoom(0.72)
+        else:
+            plotter.camera_position = [(0.0, -5.0, 7.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+            plotter.camera.zoom(0.75)
