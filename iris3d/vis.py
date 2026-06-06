@@ -63,16 +63,14 @@ class EventVisualizer:
 
     def plot_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8):
         """
-        Generates and displays the fluid 3D interactive scene with helical track bending,
-        Missing Transverse Energy (MET) balancing, an advanced HUD Overlay, and a Lego Plot.
+        Generates and displays the fluid 3D interactive scene with cross-subplot 
+        picking safely isolated from PyVista's active subplot context bugs.
         """
         import numpy as np
         import pyvista as pv
 
-        # Configuration du mode Split Screen (1 ligne, 2 colonnes)
         plotter = pv.Plotter(window_size=[1500, 750], shape=(1, 2), title=f"Iris3D - Dual Static Display")
         
-        # Récupération sécurisée des métadonnées (Correction de l'AttributeError)
         try:
             run_id = getattr(event.metadata, "run_id", "N/A")
             event_id = getattr(event.metadata, "event_id", "N/A")
@@ -83,9 +81,31 @@ class EventVisualizer:
             except Exception:
                 run_id, event_id = "N/A", "N/A"
 
-        # ----------------------------------------------------------
+        self.tooltip_dict = {}
+        self.current_selected_id = None
+        
+        # --- REGISTRE CENTRAL DES ACTEURS POUR SÉCURISER LE PICKING ---
+        # On y stocke les vraies références d'acteurs pour contourner plotter.actors
+        self._actor_registry = {
+            "particles": {},
+            "jet_cones": {},
+            "jet_towers": {},
+            "met": {}
+        }
+
+        spatial_data = self.transformer.extract_event_arrays(
+            event, p_scale=p_scale, j_scale=j_scale, B_field=B_field,
+            detector_ecal_r=self.detector_ecal_r,
+            detector_hcal_r=self.calorimeter_outer_radius,
+            detector_muon_r=self.detector_muon_r
+        )
+        
+        p_meta = spatial_data["particle_metadata"]
+        p_paths = spatial_data["particle_paths"]
+
+        # ==========================================================
         # CONFIGURATION DU SUBPLOT GAUCHE : DÉTECTEUR CYLINDRIQUE
-        # ----------------------------------------------------------
+        # ==========================================================
         plotter.subplot(0, 0)
         plotter.set_background(color="#0f172a")               
         plotter.add_axes()
@@ -97,19 +117,7 @@ class EventVisualizer:
         vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
         plotter.add_mesh(vertex, color="magenta", render_points_as_spheres=True, label="Interaction Vertex")
         
-        self.tooltip_dict = {}
-        self.current_selected_id = None
-        
-        spatial_data = self.transformer.extract_event_arrays(
-            event, p_scale=p_scale, j_scale=j_scale, B_field=B_field,
-            detector_ecal_r=self.detector_ecal_r,
-            detector_hcal_r=self.calorimeter_outer_radius,
-            detector_muon_r=self.detector_muon_r
-        )
-        
-        p_meta = spatial_data["particle_metadata"]
-        p_paths = spatial_data["particle_paths"]
-        
+        # Rendu des traces de particules
         for i in range(len(p_paths)):
             points = p_paths[i]
             metadata = p_meta[i]
@@ -122,7 +130,7 @@ class EventVisualizer:
                 pt_val = source_particle.pt
                 eta_val = source_particle.eta
                 phi_val = source_particle.phi
-            except (TypeError, KeyError, IndexError, AttributeError):
+            except Exception:
                 try:
                     pt_val = float(event["particles"]["pt"][i])
                     eta_val = float(event["particles"]["eta"][i])
@@ -159,13 +167,13 @@ class EventVisualizer:
             track_mesh.field_data["mesh_id"] = [mesh_id]
             
             if p_charge == 0:
-                if p_pid == 22:
-                    plotter.add_mesh(track_mesh, color=color, line_width=2.5, opacity=0.9, name=mesh_id)
-                else:
-                    plotter.add_mesh(track_mesh, color=color, line_width=1, opacity=0.5, name=mesh_id)
+                act = plotter.add_mesh(track_mesh, color=color, line_width=2.5 if p_pid == 22 else 1, opacity=0.9 if p_pid == 22 else 0.5, name=mesh_id)
             else:
-                plotter.add_mesh(track_mesh, color=color, line_width=4, opacity=1.0, name=mesh_id)
+                act = plotter.add_mesh(track_mesh, color=color, line_width=4, opacity=1.0, name=mesh_id)
+                
+            self._actor_registry["particles"][i] = act
 
+        # Rendu des Cônes de Jets (Subplot Gauche)
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
             direction = np.array(jet_geo["unit_direction"])
             length = jet_geo["length"]
@@ -180,7 +188,7 @@ class EventVisualizer:
                 j_eta = source_jet.eta
                 j_phi = source_jet.phi
                 j_dr = source_jet.delta_r
-            except (TypeError, KeyError, IndexError, AttributeError):
+            except Exception:
                 try:
                     j_energy = float(event["jets"]["energy"][i])
                     j_eta = float(event["jets"]["eta"][i])
@@ -203,8 +211,10 @@ class EventVisualizer:
             self.tooltip_dict[mesh_id] = (jet_hover_text, color)
             jet_cone.field_data["mesh_id"] = [mesh_id]
             
-            plotter.add_mesh(jet_cone, color=color, opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id)
+            act = plotter.add_mesh(jet_cone, color=color, opacity=0.35, show_edges=True, edge_color="darkorange", name=mesh_id)
+            self._actor_registry["jet_cones"][i] = act
 
+        # Rendu de la Missing Energy (MET)
         met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
         if met_data["pt"] > 0.5:
             met_vector = np.array(met_data["vector"])
@@ -234,49 +244,15 @@ class EventVisualizer:
             met_mesh.field_data["mesh_id"] = [mesh_id]
             met_cone_tip.field_data["mesh_id"] = [mesh_id]
             
-            plotter.add_mesh(met_mesh, color=color, line_width=5, opacity=1.0, name=f"{mesh_id}_line")
-            plotter.add_mesh(met_cone_tip, color=color, opacity=1.0, name=f"{mesh_id}_tip")
+            act_line = plotter.add_mesh(met_mesh, color=color, line_width=5, opacity=1.0, name=f"{mesh_id}_line")
+            act_tip = plotter.add_mesh(met_cone_tip, color=color, opacity=1.0, name=f"{mesh_id}_tip")
+            self._actor_registry["met"] = {"line": act_line, "tip": act_tip}
 
-        hud_static_text = (
-            f"IRIS3D // EVENT DETECTOR HUD ACTIVE\n"
-            f"-----------------------------------\n"
-            f"Run ID    : {run_id}\n"
-            f"Event ID  : {event_id}\n\n"
-            f"Select sub-atomic signature to decode..."
+        # Bannière texte
+        plotter.add_text(
+            f"IRIS3D // EVENT DETECTOR HUD ACTIVE\n-----------------------------------\nRun ID : {run_id} | Event ID : {event_id}\n\nSelect sub-atomic signature to decode...", 
+            position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner"
         )
-        plotter.add_text(hud_static_text, position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner")
-
-        def picking_callback(mesh):
-            if mesh and "mesh_id" in mesh.field_data:
-                mesh_id = mesh.field_data["mesh_id"][0]
-                if mesh_id in self.tooltip_dict:
-                    hud_text, orig_color_name = self.tooltip_dict[mesh_id]
-                    rgb_orig = pv.Color(orig_color_name).float_rgb
-                    rgb_white = (1.0, 1.0, 1.0)
-                    
-                    if self.current_selected_id and self.current_selected_id in self.tooltip_dict:
-                        old_id = self.current_selected_id
-                        _, old_color_name = self.tooltip_dict[old_id]
-                        rgb_old = pv.Color(old_color_name).float_rgb
-                        if old_id.startswith("missing_energy"):
-                            if f"{old_id}_line" in plotter.actors: plotter.actors[f"{old_id}_line"].GetProperty().SetColor(rgb_old)
-                            if f"{old_id}_tip" in plotter.actors: plotter.actors[f"{old_id}_tip"].GetProperty().SetColor(rgb_old)
-                        else:
-                            if old_id in plotter.actors: plotter.actors[old_id].GetProperty().SetColor(rgb_old)
-                    
-                    if mesh_id.startswith("missing_energy"):
-                        if f"{mesh_id}_line" in plotter.actors: plotter.actors[f"{mesh_id}_line"].GetProperty().SetColor(rgb_white)
-                        if f"{mesh_id}_tip" in plotter.actors: plotter.actors[f"{mesh_id}_tip"].GetProperty().SetColor(rgb_white)
-                    else:
-                        if mesh_id in plotter.actors: plotter.actors[mesh_id].GetProperty().SetColor(rgb_white)
-                            
-                    self.current_selected_id = mesh_id
-                    plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner")
-                    
-        plotter.add_legend(bcolor=None, face="circle")
-        plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
-        plotter.camera.zoom(0.8)
-        plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
 
         # ==========================================================
         # CONFIGURATION DU SUBPLOT DROIT : LEGO PLOT STATIQUE
@@ -285,56 +261,102 @@ class EventVisualizer:
         plotter.set_background(color="#090d16")
         plotter.add_text("CALORIMETER METRIC (STATIC LEGO PLOT)", position=(0.05, 0.92), font_size=12, font="courier", color="#fb923c")
         
-        # Base plane déroulée (eta, phi)
         lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
         plotter.add_mesh(lego_floor, color="#1e293b", style="surface", show_edges=True, edge_color="#334155", pickable=False)
         
-        # Dessin des axes et labels textuels
         plotter.add_point_labels(np.array([[-3.0, -3.3, 0.01], [0.0, -3.3, 0.01], [3.0, -3.3, 0.01]]), ["eta = -3.0", "eta = 0.0", "eta = +3.0"], font_family="courier", font_size=12, show_points=False)
         plotter.add_mesh(pv.Line([-3.0, -3.3, 0.01], [3.0, -3.3, 0.01]), color="#fb923c", line_width=2, pickable=False)
         plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
         plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color="#fb923c", line_width=2, pickable=False)
 
-        # --- CALCUL D'ÉCHELLE DYNAMIQUE (Évite les barres trop hautes) ---
+        # Calcul d'échelle
         all_energies = []
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
-            try:
-                e = float(event["jets"]["energy"][i])
+            try: j_energy = float(event["jets"]["energy"][i])
             except Exception:
-                try: e = float(event.jets[i].energy)
-                except Exception: e = jet_geo["length"] * 10.0
-            all_energies.append(e)
+                try: j_energy = event.jets[i].energy
+                except Exception: j_energy = jet_geo["length"] * 10.0
+            all_energies.append(j_energy)
             
-        # On définit une hauteur max pour la plus grande tour (ex: 2.5 unités de haut)
         max_allowed_height = 2.5 
         max_e = max(all_energies) if len(all_energies) > 0 else 1.0
-        v_scale = max_allowed_height / max_e  # Facteur d'échelle adapté à l'événement
+        v_scale = max_allowed_height / max_e  
 
-        # Génération des maillages Lego fixes basés sur le nouveau v_scale
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
             direction = np.array(jet_geo["unit_direction"])
             eta = jet_geo.get("eta", direction[2] * 1.5)
             phi = jet_geo.get("phi", np.arctan2(direction[1], direction[0]))
-            
-            j_energy = all_energies[i]
-            final_height = j_energy * v_scale  # Utilisation de l'échelle calculée
+            final_height = all_energies[i] * v_scale  
 
-            # Génération directe de la boîte
-            lego_tower = pv.Box(bounds=[
-                eta - 0.18, eta + 0.18,
-                phi - 0.18, phi + 0.18,
-                0.0, final_height
-            ])
+            lego_tower = pv.Box(bounds=[eta - 0.18, eta + 0.18, phi - 0.18, phi + 0.18, 0.0, final_height])
+            mesh_id = f"jet_{i}"
+            lego_tower.field_data["mesh_id"] = [mesh_id]
             
-            plotter.add_mesh(lego_tower, color="orange", opacity=0.85, show_edges=True, edge_color="white", pickable=False)
+            act = plotter.add_mesh(lego_tower, color="orange", opacity=0.85, show_edges=True, edge_color="white", name=f"lego_tower_{i}")
+            self._actor_registry["jet_towers"][i] = act
 
-        # Orientation optimale de la caméra pour apprécier le relief 3D
+        # --- FONCTION DE RAPPEL SÉCURISÉE PAR LE REGISTRE CENTRAL ---
+        def picking_callback(mesh):
+            if not mesh or "mesh_id" not in mesh.field_data:
+                return
+            
+            mesh_id = mesh.field_data["mesh_id"][0]
+            if mesh_id not in self.tooltip_dict:
+                return
+
+            hud_text, orig_color_name = self.tooltip_dict[mesh_id]
+            rgb_orig = pv.Color(orig_color_name).float_rgb
+            rgb_white = (1.0, 1.0, 1.0)
+            
+            # 1. NETTOYAGE GLOBAL VIA LE REGISTRE D'ACTEURS DIRECTS
+            if self.current_selected_id:
+                old_id = self.current_selected_id
+                _, old_color_name = self.tooltip_dict[old_id]
+                rgb_old = pv.Color(old_color_name).float_rgb
+                
+                if old_id.startswith("particle_"):
+                    idx = int(old_id.split('_')[1])
+                    self._actor_registry["particles"][idx].GetProperty().SetColor(rgb_old)
+                elif old_id.startswith("jet_"):
+                    idx = int(old_id.split('_')[1])
+                    self._actor_registry["jet_cones"][idx].GetProperty().SetColor(rgb_old)
+                    self._actor_registry["jet_towers"][idx].GetProperty().SetColor(rgb_old)
+                elif old_id == "missing_energy_vector" and self._actor_registry["met"]:
+                    self._actor_registry["met"]["line"].GetProperty().SetColor(rgb_old)
+                    self._actor_registry["met"]["tip"].GetProperty().SetColor(rgb_old)
+
+            # 2. APPLICATION DU HIGHLIGHT BLANC
+            if mesh_id.startswith("particle_"):
+                idx = int(mesh_id.split('_')[1])
+                self._actor_registry["particles"][idx].GetProperty().SetColor(rgb_white)
+            elif mesh_id.startswith("jet_"):
+                idx = int(mesh_id.split('_')[1])
+                self._actor_registry["jet_cones"][idx].GetProperty().SetColor(rgb_white)
+                self._actor_registry["jet_towers"][idx].GetProperty().SetColor(rgb_white)
+            elif mesh_id == "missing_energy_vector" and self._actor_registry["met"]:
+                self._actor_registry["met"]["line"].GetProperty().SetColor(rgb_white)
+                self._actor_registry["met"]["tip"].GetProperty().SetColor(rgb_white)
+
+            self.current_selected_id = mesh_id
+            
+            # Force la mise à jour du texte toujours sur le subplot gauche
+            plotter.subplot(0, 0)
+            plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color="#38bdf8", name="metadata_banner")
+            plotter.render()
+
+        # Cadres de caméra initiaux
+        plotter.subplot(0, 0)
+        plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
+        plotter.camera.zoom(0.8)
+        
+        plotter.subplot(0, 1)
         plotter.camera_position = [(0.0, -5.0, 7.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
         plotter.camera.zoom(0.75)
-
-        # Lancement de l'affichage interactif statique
+        
+        # Activation globale unique
+        plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         plotter.show()
-
+    
     def animate_event(self, event: CollisionEvent, p_scale: float = 1.0, j_scale: float = 0.01, B_field: float = 3.8, speed: float = 0.05):
         """
         Optimized High-Performance Cinematic Version.
