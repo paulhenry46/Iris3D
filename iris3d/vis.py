@@ -708,7 +708,7 @@ class EventVisualizer:
                 self.tooltip_dict[mesh_id] = (f">> INSPECTING RECONSTRUCTED JET #{i}\n Transverse E : {pt_energy:.2f} GeV", "orange")
 
             # Ajout au plotter
-            act = plotter.add_mesh(lego_box, color=self.theme["jet_tower"], opacity=0.85, show_edges=True, edge_color=self.theme["jet_tower_edge"], name=f"lego_tower_{i}")
+            act = plotter.add_mesh(lego_box, color=self.theme["jet_tower"], opacity=1, show_edges=True, edge_color=self.theme["jet_tower_edge"], name=f"lego_tower_{i}")
             
             # Application de la logique spécifique au mode
             if is_cinematic and ctx is not None:
@@ -769,8 +769,6 @@ class EventVisualizer:
         # Rafraîchissement matériel des deux subplots en même temps
         if hasattr(self, "_active_plotter") and self._active_plotter:
             self._active_plotter.render()
-
-
     
     def _add_filter_widgets(self, plotter):
         """Adds interactive sliders with toggle capabilities using the 'f' key."""
