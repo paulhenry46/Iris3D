@@ -174,6 +174,7 @@ class EventVisualizer:
             plotter.render()
 
         # Activation globale unique
+        self._setup_interactive_shortcuts(plotter)
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         plotter.show()
     
@@ -187,7 +188,7 @@ class EventVisualizer:
 
         plotter.subplot(*subplot_idx)
         plotter.set_background(color=self.theme["bg_detector"])
-        plotter.add_axes()
+        plotter.add_axes(labels_off=True)
         plotter.show_grid(color=self.theme["grid_color"])                     
         plotter.enable_anti_aliasing("msaa", multi_samples=4)  
         
@@ -425,6 +426,13 @@ class EventVisualizer:
         # Conteneurs d'animation internes (permettent de lier les variables locales aux sous-fonctions)
         ctx = {}
 
+        # (Dans vis.py -> animate_event)
+        # Sauvegarde des pointeurs pour le module d'exportation vidéo
+        self._current_ctx = ctx
+        self._current_mode = mode
+        self._current_spatial_data = spatial_data
+        self._active_plotter = plotter # Crucial pour que export.py trouve la scène actuelle
+
         # 2. Routage et initialisation des subplots
         if mode == "both":
             self._plot_3d_detector(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 0))
@@ -435,6 +443,7 @@ class EventVisualizer:
             self._plot_lego_calorimeter(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 1))
 
         # Gestion de l'état du clavier
+        self._setup_interactive_shortcuts(plotter)
         state = {"is_paused": False}
         plotter.add_key_event('space', lambda: state.update({"is_paused": not state["is_paused"]}))
 
@@ -471,7 +480,7 @@ class EventVisualizer:
                     
                     for act in ctx["particle_actors"]: act.SetVisibility(False)
                     for act in ctx["jet_actors"]: act.SetVisibility(False)
-                    for idx, act in self._actor_registry["jet_towers"].items(): act.SetVisibility(False)
+                    for idx, act in self._actor_registry["jet_towers"].items(): act["actor"].SetVisibility(False)
                     
                     dist = abs(current_r)
                     beam_len = min(1.0, dist * 0.5) 
@@ -557,14 +566,14 @@ class EventVisualizer:
                         target_height = ctx["max_heights"][i] * min(1.0, max(0.0, progress))
                         
                         if target_height > 0.001:
-                            self._actor_registry["jet_towers"][i].SetVisibility(True)
+                            self._actor_registry["jet_towers"][i]["actor"].SetVisibility(True)
                             new_pts = init_pts.copy()
                             new_pts[init_pts[:, 2] > 0.001, 2] = target_height
                             box_mesh.points = new_pts
                         else:
                             self._actor_registry["jet_towers"][i].SetVisibility(False)
                 else:
-                    for idx, act in self._actor_registry["jet_towers"].items(): act.SetVisibility(False)
+                    for idx, act in self._actor_registry["jet_towers"].items(): act["actor"].SetVisibility(False)
 
             plotter.update(16, force_redraw=True)
 
@@ -616,6 +625,7 @@ class EventVisualizer:
             plotter.render()
 
         # Activation finale de l'interactivité
+        
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         plotter.show()
 
@@ -631,7 +641,7 @@ class EventVisualizer:
         plotter.set_background(color=self.theme["bg_detector"])
         
         title_type = "LEGO PLOT" if is_cinematic else "STATIC LEGO PLOT"
-        plotter.add_text(f"CALORIMETER METRIC ({title_type})", position=(0.05, 0.92), font_size=12, font="courier", color=self.theme["lego_title"])
+        plotter.add_text(f"CALORIMETER METRIC ({title_type})", position=(0.05, 0.92), font_size=12, font="courier", color=self.theme["lego_title"], name="lego_title")
         
         # 1. RENDU DE L'ENVIRONNEMENT ET DES AXES (Commun)
         lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
@@ -830,3 +840,13 @@ class EventVisualizer:
 
         # Rafraîchissement matériel immédiat
         self._active_plotter.render()
+    
+    def _setup_interactive_shortcuts(self, plotter):
+        """Binds 'e' for screenshots and 'r' for video recording using the export module."""
+        from . import export  # Import local pour éviter les boucles d'import
+        
+        # Touche [E] pour l'image
+        plotter.add_key_event("e", lambda: export.export_screenshot(self))
+        
+        # Touche [R] (comme Record) pour la vidéo
+        plotter.add_key_event("r", lambda: export.export_interactive_video(self, fps=30, duration_seconds=3.0))

@@ -113,7 +113,7 @@ if __name__ == "__main__":
     event = load_event(mock_hep_event)
     
     print("Initializing fluid PyVista 3D event viewer...")
-    visualizer = EventVisualizer()
+    visualizer = EventVisualizer(theme_name="publication")
     
     # Fire up the graphics layer!
     visualizer.plot_event(event, p_scale=2.2, j_scale=0.012)
@@ -122,7 +122,7 @@ if __name__ == "__main__":
 
     # TEST 1 : Vérifie les hélices extrêmes
     print("Rendering Extreme pT Event...")
-    visualizer.plot_event(mock_event_extreme_pt, p_scale=1.5, j_scale=0.01)
+    visualizer.plot_event(mock_event_extreme_pt,  p_scale=1.5, j_scale=0.01)
 
     # TEST 2 : Vérifie les pointillés des photons du Higgs
     print("Rendering Higgs di-photon Event...")
