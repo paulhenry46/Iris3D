@@ -393,6 +393,7 @@ class EventVisualizer:
         """
         Orchestrates the high-performance cinematic animation display.
         Modes available: "both", "detector", "lego".
+        Enhanced: Real-time track sub-stepping interpolation for fluid rendering.
         """
         import numpy as np
         import pyvista as pv
@@ -423,15 +424,14 @@ class EventVisualizer:
             "met": {}
         }
 
-        # Conteneurs d'animation internes (permettent de lier les variables locales aux sous-fonctions)
+        # Conteneurs d'animation internes
         ctx = {}
 
-        # (Dans vis.py -> animate_event)
         # Sauvegarde des pointeurs pour le module d'exportation vidéo
         self._current_ctx = ctx
         self._current_mode = mode
         self._current_spatial_data = spatial_data
-        self._active_plotter = plotter # Crucial pour que export.py trouve la scène actuelle
+        self._active_plotter = plotter 
 
         # 2. Routage et initialisation des subplots
         if mode == "both":
@@ -452,8 +452,11 @@ class EventVisualizer:
         max_r = self.detector_muon_r
         current_r = -3.0  
 
+        # Pre-calcul des distances pour s'affranchir de la surcharge CPU dans la boucle standard
+        track_distances = [np.linalg.norm(full_path, axis=1) for _, full_path in ctx["particle_polydata_lists"]]
+
         # ==========================================================
-        # BOUCLE DE RENDU OPTIMISÉE (ZÉRO ALLOCATION EN SURFACE)
+        # BOUCLE DE RENDU OPTIMISÉE (INTERPOLATION EN DIRECT)
         # ==========================================================
         while plotter.render_window is not None:
             if not hasattr(plotter, 'iren') or plotter.iren is None or plotter.render_window.GetInteractor().GetDone():
@@ -464,7 +467,7 @@ class EventVisualizer:
                 if current_r > max_r + 0.5:
                     current_r = -3.0  
 
-            # --- MISE À JOUR : SUBPLOT GAUCHE (DÉTECTEUR) ---
+            # --- MISE À UPDATE : SUBPLOT GAUCHE (DÉTECTEUR) ---
             if mode in ["both", "detector"]:
                 plotter.subplot(0, 0)
                 
@@ -495,7 +498,7 @@ class EventVisualizer:
                     status_txt = "STATUS: PAUSED" if state["is_paused"] else "Status: STEERING PACKETS"
                     ctx["hud"].SetInput(f"IRIS3D // LHC BEAMS APPROACHING\n-------------------------------------------\n{status_txt}")
                     
-                else:  # Phase de Collision
+                else:  # Phase de Collision (Avec Interpolation Continue Intégrée)
                     ctx["beam1_actor"].SetVisibility(False)
                     ctx["beam2_actor"].SetVisibility(False)
                     ctx["vertex_actor"].GetProperty().SetColor(pv.Color("white" if current_r < 0.2 else "magenta").float_rgb)
@@ -514,16 +517,32 @@ class EventVisualizer:
                         ctx["calorimeter_actor"].GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
                         ctx["shockwave_actor"].SetVisibility(False)
 
-                    # Masquage dynamique des trajectoires
+                    # INTERPOLATION VECTORIELLE DES TRACES EN DIRECT
                     for i, (poly, full_path) in enumerate(ctx["particle_polydata_lists"]):
                         actor = ctx["particle_actors"][i]
-                        distances = np.linalg.norm(full_path, axis=1)
-                        visible_mask = distances <= current_r
-                        visible_points = full_path[visible_mask]
+                        distances = track_distances[i]
+                        
+                        inside_mask = distances <= current_r
+                        visible_points = list(full_path[inside_mask])
+                        
+                        outside_indices = np.where(~inside_mask)[0]
+                        
+                        if len(outside_indices) > 0 and len(visible_points) > 0:
+                            next_idx = outside_indices[0]
+                            prev_idx = next_idx - 1
+                            
+                            p_prev, p_next = full_path[prev_idx], full_path[next_idx]
+                            d_prev, d_next = distances[prev_idx], distances[next_idx]
+                            
+                            if d_next != d_prev:
+                                frac = (current_r - d_prev) / (d_next - d_prev)
+                                exact_front_point = p_prev + frac * (p_next - p_prev)
+                                visible_points.append(exact_front_point)
                         
                         if len(visible_points) > 1:
                             actor.SetVisibility(True)
-                            new_spline = pv.Spline(visible_points, n_points=len(visible_points) * 2)
+                            # Calcul de spline à haute définition pour amortir les virages géométriques
+                            new_spline = pv.Spline(np.array(visible_points), n_points=max(15, len(visible_points) * 2))
                             actor.mapper.dataset.copy_from(new_spline)
                             actor.mapper.dataset.Modified()
                         else:
@@ -548,9 +567,8 @@ class EventVisualizer:
                     state_label = "|| PAUSED" if state["is_paused"] else ('TRACKING CORE' if current_r < self.detector_ecal_r else 'CALORIMETER SHOWER')
                     ctx["hud"].SetInput(f"IRIS3D // TIME-OF-FLIGHT SIMULATION ACTIVE\n-------------------------------------------\nWavefront Radius : {current_r:.2f} meters\nSub-atomic State : {state_label}")
 
-            # --- MISE À JOUR : SUBPLOT DROIT (LEGO PLOT) ---
+            # --- MISE À UPDATE : SUBPLOT DROIT (LEGO PLOT) ---
             if mode in ["both", "lego"]:
-                # Si on est en mode "lego" pur (pas de détecteur), l'animation se cale sur un rayon virtuel positif
                 v_current_r = current_r if mode == "both" else (current_r + 3.0)
                 
                 if mode == "lego":
@@ -571,7 +589,7 @@ class EventVisualizer:
                             new_pts[init_pts[:, 2] > 0.001, 2] = target_height
                             box_mesh.points = new_pts
                         else:
-                            self._actor_registry["jet_towers"][i].SetVisibility(False)
+                            self._actor_registry["jet_towers"][i]["actor"].SetVisibility(False)
                 else:
                     for idx, act in self._actor_registry["jet_towers"].items(): act["actor"].SetVisibility(False)
 
@@ -589,7 +607,6 @@ class EventVisualizer:
             rgb_orig = pv.Color(orig_color_name).float_rgb
             rgb_white = (1.0, 1.0, 1.0)
             
-            # Nettoyage
             if self.current_selected_id:
                 old_id = self.current_selected_id
                 _, old_color_name = self.tooltip_dict[old_id]
@@ -606,7 +623,6 @@ class EventVisualizer:
                     self._actor_registry["met"]["line"].GetProperty().SetColor(rgb_old)
                     self._actor_registry["met"]["tip"].GetProperty().SetColor(rgb_old)
 
-            # Highlight
             if mesh_id.startswith("particle_"):
                 idx = int(mesh_id.split('_')[1])
                 if idx in self._actor_registry["particles"]: self._actor_registry["particles"][idx].GetProperty().SetColor(rgb_white)
@@ -624,11 +640,9 @@ class EventVisualizer:
                 ctx["hud"].SetInput(hud_text)
             plotter.render()
 
-        # Activation finale de l'interactivité
-        
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
         plotter.show()
-
+    
     def _plot_lego_calorimeter(self, plotter, spatial_data, event=None, ctx=None, is_cinematic: bool = False, subplot_idx=(0, 1)):
         """
         Unified method to draw the calorimeter Lego view, supporting both static 
