@@ -139,13 +139,13 @@ class EventVisualizer:
                 if old_id.startswith("particle_"):
                     idx = int(old_id.split('_')[1])
                     if idx in self._actor_registry["particles"]:
-                        self._actor_registry["particles"][idx].GetProperty().SetColor(rgb_old)
+                        self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(rgb_old)
                 elif old_id.startswith("jet_"):
                     idx = int(old_id.split('_')[1])
                     if idx in self._actor_registry["jet_cones"]:
-                        self._actor_registry["jet_cones"][idx].GetProperty().SetColor(rgb_old)
+                        self._actor_registry["jet_cones"][idx]["actor"].GetProperty().SetColor(rgb_old)
                     if idx in self._actor_registry["jet_towers"]:
-                        self._actor_registry["jet_towers"][idx].GetProperty().SetColor(rgb_old)
+                        self._actor_registry["jet_towers"][idx]["actor"].GetProperty().SetColor(rgb_old)
                 elif old_id == "missing_energy_vector" and self._actor_registry["met"]:
                     self._actor_registry["met"]["line"].GetProperty().SetColor(rgb_old)
                     self._actor_registry["met"]["tip"].GetProperty().SetColor(rgb_old)
@@ -154,13 +154,13 @@ class EventVisualizer:
             if mesh_id.startswith("particle_"):
                 idx = int(mesh_id.split('_')[1])
                 if idx in self._actor_registry["particles"]:
-                    self._actor_registry["particles"][idx].GetProperty().SetColor(rgb_white)
+                    self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(rgb_white)
             elif mesh_id.startswith("jet_"):
                 idx = int(mesh_id.split('_')[1])
                 if idx in self._actor_registry["jet_cones"]:
-                    self._actor_registry["jet_cones"][idx].GetProperty().SetColor(rgb_white)
+                    self._actor_registry["jet_cones"][idx]["actor"].GetProperty().SetColor(rgb_white)
                 if idx in self._actor_registry["jet_towers"]:
-                    self._actor_registry["jet_towers"][idx].GetProperty().SetColor(rgb_white)
+                    self._actor_registry["jet_towers"][idx]["actor"].GetProperty().SetColor(rgb_white)
             elif mesh_id == "missing_energy_vector" and self._actor_registry["met"]:
                 self._actor_registry["met"]["line"].GetProperty().SetColor(rgb_white)
                 self._actor_registry["met"]["tip"].GetProperty().SetColor(rgb_white)
@@ -281,7 +281,14 @@ class EventVisualizer:
                 ctx["particle_actors"].append(act)
                 ctx["particle_polydata_lists"].append((track_mesh, np.array(points)))
                 
-            self._actor_registry["particles"][i] = act
+            #self._actor_registry["particles"][i] = act
+
+            self._actor_registry["particles"][i] = {
+                    "actor": act,
+                    "pt": pt_val,
+                    "eta": eta_val,
+                    "phi": phi_val
+                }
 
         # 3. RENDU DES CÔNES DE JETS
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
@@ -316,7 +323,13 @@ class EventVisualizer:
             
             if is_cinematic and ctx is not None:
                 ctx["jet_actors"].append(act)
-            self._actor_registry["jet_cones"][i] = act
+            #self._actor_registry["jet_cones"][i] = act
+            self._actor_registry["jet_cones"][i] = {
+                "actor": act,
+                "pt": j_energy,       # ou jet_energy selon tes données
+                "eta": j_eta,
+                "phi": j_phi
+            }
 
         # 4. RENDU DE L'ÉNERGIE MANQUANTE (MET)
         met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
@@ -367,6 +380,10 @@ class EventVisualizer:
                 position="upper_left", font_size=11, font="courier", color=self.theme["hud_text"], name="metadata_banner"
             )
             plotter.add_legend(bcolor=None, face="circle")
+            
+        # À la fin de _plot_3d_detector, juste avant le réglage caméra :
+        if not is_cinematic:
+            self._add_filter_widgets(plotter)
             
         plotter.camera_position = [(5.0, 5.0, 4.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)]
         plotter.camera.zoom(0.8)
@@ -676,7 +693,14 @@ class EventVisualizer:
                 ctx["max_heights"].append(final_height)
             
             # Enregistrement dans le registre central (Crucial pour la synchro)
-            self._actor_registry["jet_towers"][i] = act
+            #self._actor_registry["jet_towers"][i] = act
+
+            self._actor_registry["jet_towers"][i] = {
+                "actor": act,
+                "pt": pt_energy,
+                "eta": eta,
+                "phi": phi
+            }
 
         # 4. CADRAGE CAMÉRA ADJUSTÉ SELON LE MODE
         if is_cinematic:
@@ -685,3 +709,124 @@ class EventVisualizer:
         else:
             plotter.camera_position = [(0.0, -5.0, 7.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
             plotter.camera.zoom(0.75)
+    
+    def _apply_cinematic_filters(self):
+        """
+        Scans all actor registries (particles, jet cones, lego towers) and toggles 
+        visibility synchronously based on current cinematic slider states.
+        """
+        # 1. FILTRAGE DES PARTICULES
+        for i, track_data in self._actor_registry["particles"].items():
+            actor = track_data["actor"]
+            pt_ok = track_data["pt"] >= self._current_filter_pt
+            eta_ok = self._current_filter_eta_min <= track_data["eta"] <= self._current_filter_eta_max
+            phi_ok = np.abs(track_data["phi"]) <= self._current_filter_phi_max
+            
+            actor.SetVisibility(True if (pt_ok and eta_ok and phi_ok) else False)
+
+        # 2. FILTRAGE DES CÔNES DE JETS (VUE 3D)
+        for i, jet_data in self._actor_registry["jet_cones"].items():
+            actor = jet_data["actor"]
+            pt_ok = jet_data["pt"] >= self._current_filter_pt
+            eta_ok = self._current_filter_eta_min <= jet_data["eta"] <= self._current_filter_eta_max
+            phi_ok = np.abs(jet_data["phi"]) <= self._current_filter_phi_max
+            
+            actor.SetVisibility(True if (pt_ok and eta_ok and phi_ok) else False)
+
+        # 3. FILTRAGE DES TOURS LEGO (VUE 2D DÉROULÉE)
+        for i, tower_data in self._actor_registry["jet_towers"].items():
+            actor = tower_data["actor"]
+            pt_ok = tower_data["pt"] >= self._current_filter_pt
+            eta_ok = self._current_filter_eta_min <= tower_data["eta"] <= self._current_filter_eta_max
+            phi_ok = np.abs(tower_data["phi"]) <= self._current_filter_phi_max
+            
+            actor.SetVisibility(True if (pt_ok and eta_ok and phi_ok) else False)
+                
+        # Rafraîchissement matériel des deux subplots en même temps
+        if hasattr(self, "_active_plotter") and self._active_plotter:
+            self._active_plotter.render()
+
+
+    
+    def _add_filter_widgets(self, plotter):
+        """Adds interactive sliders with toggle capabilities using the 'f' key."""
+        import numpy as np
+
+        # Initialisation des états internes de filtrage
+        self._current_filter_pt = 0.0
+        self._current_filter_eta_min = -5.0
+        self._current_filter_eta_max = 5.0
+        self._current_filter_phi_max = np.pi  
+        self._active_plotter = plotter  
+        
+        # Structure de contrôle pour le masquage
+        self._filter_widgets = []
+        self._filters_visible = True
+
+        # Callbacks des sliders
+        def callback_pt(value):
+            self._current_filter_pt = value
+            self._apply_cinematic_filters()
+
+        def callback_eta_max(value):
+            self._current_filter_eta_max = value
+            self._apply_cinematic_filters()
+
+        def callback_phi_max(value):
+            self._current_filter_phi_max = value
+            self._apply_cinematic_filters()
+
+        # 1. Configuration et stockage du Slider pT
+        w_pt = plotter.add_slider_widget(
+            callback=callback_pt, rng=[0.0, 20.0], value=0.0, title="Min pT (GeV)",
+            pointa=(0.02, 0.06), pointb=(0.25, 0.06), color=self.theme["hud_text"],
+            title_height=0.015, style="modern", interaction_event="always"
+        )
+        self._filter_widgets.append(w_pt)
+
+        # 2. Configuration et stockage du Slider Eta
+        w_eta = plotter.add_slider_widget(
+            callback=callback_eta_max, rng=[0.0, 5.0], value=5.0, title="Max eta",
+            pointa=(0.02, 0.18), pointb=(0.25, 0.18), color=self.theme["hud_text"],
+            title_height=0.015, style="modern", interaction_event="always"
+        )
+        self._filter_widgets.append(w_eta)
+
+        # 3. Configuration et stockage du Slider Phi
+        w_phi = plotter.add_slider_widget(
+            callback=callback_phi_max, rng=[0.0, np.pi], value=np.pi, title="Max phi (rad)",
+            pointa=(0.02, 0.30), pointb=(0.25, 0.30), color=self.theme["hud_text"],
+            title_height=0.015, style="modern", interaction_event="always"
+        )
+        self._filter_widgets.append(w_phi)
+
+        # 4. Liaison de la touche "f" à notre fonction de bascule
+        plotter.add_key_event("f", self._toggle_filter_visibility)
+
+    def _toggle_filter_visibility(self):
+        """Toggles the on-screen visibility of all cinematic slider widgets cleanly."""
+        if not hasattr(self, "_filter_widgets") or not self._filter_widgets:
+            return
+        
+        if not hasattr(self, "_active_plotter") or not self._active_plotter:
+            return
+
+        # SÉCURITÉ VTK : On force le plotter à se re-concentrer sur le subplot 3D (0, 0)
+        # pour éviter le warning "no current renderer" lors de la désactivation des widgets
+        try:
+            self._active_plotter.subplot(0, 0)
+        except Exception:
+            pass # Sécurité si l'architecture des subplots changeait à l'avenir
+
+        # Inversion du drapeau d'état
+        self._filters_visible = not self._filters_visible
+
+        # Application du changement d'état
+        for widget in self._filter_widgets:
+            if self._filters_visible:
+                widget.EnabledOn()  
+            else:
+                widget.EnabledOff() 
+
+        # Rafraîchissement matériel immédiat
+        self._active_plotter.render()
