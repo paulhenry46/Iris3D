@@ -41,7 +41,7 @@ event_from_rows = load_event(row_based_data)
 
 ```
 
-### 📊FORMAT 2: Columnar Data Layout
+### FORMAT 2: Columnar Data Layout
 Inside `particles` and `jets`, fields are structured as a **dictionary of parallel arrays/vectors**. Every feature array must have matching dimensions. The parser automatically sanitizes low-level data structures, including decoding byte strings (`b"mu+"`) to standard text string structures.
 
 ```python
@@ -118,7 +118,7 @@ The `EventVisualizer` class is the central engine of **Iris3D**. It orchestrates
 
 ---
 
-## 🛠️ Class Initialization & Custom Themes
+## Class Initialization & Custom Themes
 
 ### `__init__(theme: str | dict = "cyberpunk")`
 
@@ -209,7 +209,7 @@ In static mode, three interactive sliders appear on the bottom-left corner of th
 * **Ghost Mode Implementation:** Filtered tracks do not disappear completely; they enter a semi-transparent *Ghost Mode* (3% opacity) and become non-pickable, allowing you to isolate primary hard scatterings without losing full event context.
 
 
-### 📋 Complete Keyboard Shortcuts Reference Table
+### Complete Keyboard Shortcuts Reference Table
 
 | Key | Action | Ingress Target / Description |
 | --- | --- | --- |
