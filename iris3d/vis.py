@@ -1011,6 +1011,8 @@ class EventVisualizer:
         
         # Touche [E] pour l'image
         plotter.add_key_event("e", lambda: export.export_screenshot(self))
-        
+        # must pip install "pyvista[jupyter]"
+        plotter.add_key_event("h", lambda: export.export_html(self))
+        # must pip install imageio imageio-ffmpeg
         # Touche [R] (comme Record) pour la vidéo
         plotter.add_key_event("r", lambda: export.export_interactive_video(self, fps=30, duration_seconds=3.0))

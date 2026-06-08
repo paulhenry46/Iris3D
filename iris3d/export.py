@@ -240,3 +240,78 @@ def export_interactive_video(visualizer, filename=None, *args, **kwargs):
         video_writer.close()
         plotter.render()
         print("[*] Unified fluid export complete.")
+
+def export_html(visualizer, filename=None, force_clean_scene=True, force_white_bg=False):
+    """
+    Exports the complete active 3D scene into a standalone interactive HTML file.
+    Follows the strict visualizer pipeline architecture to sweep text or widgets 
+    before freezing the WebGL geometry, then fully restores the canvas state.
+    """
+    if not hasattr(visualizer, "_active_plotter") or not visualizer._active_plotter:
+        print("[-] Error: No active plotter found.")
+        return
+
+    plotter = visualizer._active_plotter
+    render_window = plotter.render_window
+    
+    if render_window is None:
+        print("[-] Error: VTK Render Window is not initialized.")
+        return
+
+    if filename is None:
+        os.makedirs("exported_scenes", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join("exported_scenes", f"interactive_event_{timestamp}.html")
+
+    print(f"[*] Packaging 100% responsive WebGL asset across all views...")
+
+    # 1. Sauvegarde de l'environnement graphique d'origine
+    original_bg = plotter.background_color
+    hidden_elements = []
+
+    # 2. NETTOYAGE CLINIQUE DE CHAQUE SUBPLOT (RENDERER) SI REQUIS
+    # Évite les artefacts de police/widgets 2D statiques figés dans le maillage HTML
+    if force_clean_scene:
+        renderer_collection = render_window.GetRenderers()
+        renderer_collection.InitTraversal()
+        
+        while True:
+            renderer = renderer_collection.GetNextItem()
+            if renderer is None:
+                break
+                
+            # Masquage des étiquettes de texte, bannières de métadonnées et HUD
+            for actor in renderer.GetActors2D():
+                if actor.GetVisibility():
+                    actor.VisibilityOff()
+                    hidden_elements.append(actor)
+
+    # 3. Adaptation du fond pour l'exposition Web
+    if force_white_bg:
+        plotter.set_background("white")
+
+    try:
+        # En VTK/PyVista, l'export de scènes composites passe par l'exporteur de scène natif
+        # qui sérialise la scène géométrique globale au format HTML standardisé
+        print(f"[*] Compiling WebGL geometries to standalone HTML document...")
+        
+        # 4. Génération et écriture du fichier HTML autonome via le moteur d'export PyVista
+        plotter.export_html(filename)
+        
+        print(f"[+] Interactive 3D event deployment ready: {filename}")
+        print(f"    -> Can be shared instantly. Open with any browser (Chrome/Safari/Firefox).")
+
+    except Exception as e:
+        print(f"[-] Failed to export interactive HTML framework: {e}")
+        
+    finally:
+        # 5. RESTAURATION INTÉGRALE DE LA SÉQUENCE INTERACTIVE
+        if force_clean_scene:
+            for element in hidden_elements:
+                element.VisibilityOn()
+
+        # Restauration du fond d'écran du visualiseur
+        plotter.background_color = original_bg
+        plotter.render()
+        
+        print("[*] Interactive window fully restored (HUD re-anchored to the live viewport).")
