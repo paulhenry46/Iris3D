@@ -92,6 +92,7 @@ class EventVisualizer:
         # 3. Initialisation des états partagés (Attributs d'instance pour le picking)
         self.tooltip_dict = {}
         self.current_selected_id = None
+        self._multi_select_ids = []
         self._actor_registry = {
             "particles": {},
             "jet_cones": {},
@@ -118,6 +119,7 @@ class EventVisualizer:
             self._plot_lego_calorimeter(plotter, spatial_data, event=event, is_cinematic=False, subplot_idx=(0, 1))
 
         # 6. Injection de la logique de picking unifiée
+        # 6. Logiciel de Picking Unifié + Calculateur de Masse Invariante (Shift + Clic)
         def picking_callback(mesh):
             if not mesh or "mesh_id" not in mesh.field_data:
                 return
@@ -127,52 +129,139 @@ class EventVisualizer:
                 return
 
             hud_text, orig_color_name = self.tooltip_dict[mesh_id]
-            rgb_orig = pv.Color(orig_color_name).float_rgb
             rgb_white = (1.0, 1.0, 1.0)
             
-            # Nettoyage de la sélection précédente via le registre partagé
-            if self.current_selected_id:
-                old_id = self.current_selected_id
-                _, old_color_name = self.tooltip_dict[old_id]
-                rgb_old = pv.Color(old_color_name).float_rgb
+            # --- ÉTAPE A : DÉTECTION DU MODE (SHIFT ENFONCÉ OU NON) ---
+            # PyVista permet de vérifier l'état du clavier via le plotter
+            shift_pressed = plotter.iren.interactor.GetShiftKey()
+
+            if shift_pressed and mesh_id.startswith("particle_"):
+                # --- MODE ANALYSE MULTI-PARTICULES ---
+                p_idx = int(mesh_id.split('_')[1])
                 
-                if old_id.startswith("particle_"):
+                # Éviter les doublons dans la sélection
+                if mesh_id not in self._multi_select_ids:
+                    self._multi_select_ids.append(mesh_id)
+                    # Coloration flash de la particule sélectionnée pour l'analyse
+                    if p_idx in self._actor_registry["particles"]:
+                        self._actor_registry["particles"][p_idx]["actor"].GetProperty().SetColor((0.0, 1.0, 1.0)) # Cyan pour l'analyse
+                        self._actor_registry["particles"][p_idx]["actor"].GetProperty().SetLineWidth(6)
+                
+                # Si on a collecté 2 particules, on lance le calcul de physique
+                if len(self._multi_select_ids) == 2:
+                    id1, id2 = self._multi_select_ids[0], self._multi_select_ids[1]
+                    idx1, idx2 = int(id1.split('_')[1]), int(id2.split('_')[1])
+                    
+                    p1_data = self._actor_registry["particles"][idx1]
+                    p2_data = self._actor_registry["particles"][idx2]
+                    
+                    # Dictionnaire des masses au repos standards (en GeV)
+                    mass_map = {11: 0.000511, 13: 0.10566, 211: 0.13957, 22: 0.0} # e, mu, pi+/-, photon
+                    
+                    # Extraction des cinématiques
+                    pt1, eta1, phi1 = p1_data["pt"], p1_data["eta"], p1_data["phi"]
+                    pt2, eta2, phi2 = p2_data["pt"], p2_data["eta"], p2_data["phi"]
+                    
+                    pid1 = p1_data.get("pid", 13) # Muon par défaut si non spécifié
+                    pid2 = p2_data.get("pid", 13)
+                    m1 = mass_map.get(abs(int(pid1)), 0.139) # par défaut masse du pion si inconnu
+                    m2 = mass_map.get(abs(int(pid2)), 0.139)
+                    
+                    # Reconstruction des quadri-vecteurs
+                    px1, py1, pz1 = pt1 * np.cos(phi1), pt1 * np.sin(phi1), pt1 * np.sinh(eta1)
+                    p1_mag = np.sqrt(px1**2 + py1**2 + pz1**2)
+                    E1 = np.sqrt(p1_mag**2 + m1**2)
+                    
+                    px2, py2, pz2 = pt2 * np.cos(phi2), pt2 * np.sin(phi2), pt2 * np.sinh(eta2)
+                    p2_mag = np.sqrt(px2**2 + py2**2 + pz2**2)
+                    E2 = np.sqrt(p2_mag**2 + m2**2)
+                    
+                    # Calculs finaux de la résonance
+                    sum_E = E1 + E2
+                    sum_px, sum_py, sum_pz = px1 + px2, py1 + py2, pz1 + pz2
+                    m_inv2 = sum_E**2 - (sum_px**2 + sum_py**2 + sum_pz**2)
+                    m_inv = np.sqrt(max(0.0, m_inv2))
+                    
+                    # Calcul du Delta R
+                    d_eta = eta1 - eta2
+                    d_phi = phi1 - phi2
+                    while d_phi > np.pi:  d_phi -= 2.0 * np.pi
+                    while d_phi < -np.pi: d_phi += 2.0 * np.pi
+                    delta_R = np.sqrt(d_eta**2 + d_phi**2)
+                    
+                    # Formatage du HUD d'Analyse Relativiste
+                    hud_text = (
+                        f"========================================\n"
+                        f" 🔬 KINEMATIC RESONANCE ANALYSIS       \n"
+                        f"========================================\n"
+                        f" Track A : ID #{idx1} (pT={pt1:.2f} GeV, η={eta1:.2f})\n"
+                        f" Track B : ID #{idx2} (pT={pt2:.2f} GeV, η={eta2:.2f})\n"
+                        f" ----------------------------------------\n"
+                        f" Spatial Separation ΔR : {delta_R:.4f}\n"
+                        f" >> INVARIANT MASS M(ab) : {m_inv:.3f} GeV <<\n"
+                        f"========================================"
+                    )
+                    
+                    # Reset de la liste pour la prochaine analyse
+                    self._multi_select_ids = []
+                    
+                else:
+                    hud_text = f" -> Particule #{p_idx} sélectionnée pour analyse.\n Maintenez [SHIFT] et cliquez sur une 2ème particule..."
+
+            else:
+                # --- MODE CLIC CLASSIQUE SINGLE-OBJECT ---
+                # Si l'utilisateur clique normalement, on reset le mode analyse et ses couleurs cyan
+                for old_id in self._multi_select_ids:
                     idx = int(old_id.split('_')[1])
                     if idx in self._actor_registry["particles"]:
-                        self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(rgb_old)
-                elif old_id.startswith("jet_"):
-                    idx = int(old_id.split('_')[1])
+                        _, col = self.tooltip_dict[old_id]
+                        self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(pv.Color(col).float_rgb)
+                self._multi_select_ids = []
+
+                # Application du comportement standard de nettoyage / reset précédent
+                if self.current_selected_id:
+                    old_id = self.current_selected_id
+                    _, old_color_name = self.tooltip_dict[old_id]
+                    rgb_old = pv.Color(old_color_name).float_rgb
+                    
+                    if old_id.startswith("particle_"):
+                        idx = int(old_id.split('_')[1])
+                        if idx in self._actor_registry["particles"]:
+                            self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(rgb_old)
+                    elif old_id.startswith("jet_"):
+                        idx = int(old_id.split('_')[1])
+                        if idx in self._actor_registry["jet_cones"]:
+                            self._actor_registry["jet_cones"][idx]["actor"].GetProperty().SetColor(rgb_old)
+                        if idx in self._actor_registry["jet_towers"]:
+                            lego_tower = self._actor_registry["jet_towers"][idx]
+                            if isinstance(lego_tower, dict) and "actor" in lego_tower:
+                                lego_tower["actor"].GetProperty().SetColor(rgb_old)
+                            elif hasattr(lego_tower, "GetProperty"):
+                                lego_tower.GetProperty().SetColor(rgb_old)
+
+                # Application de la surbrillance blanche sur l'élément unique cliqué
+                if mesh_id.startswith("particle_"):
+                    idx = int(mesh_id.split('_')[1])
+                    if idx in self._actor_registry["particles"]:
+                        self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(rgb_white)
+                elif mesh_id.startswith("jet_"):
+                    idx = int(mesh_id.split('_')[1])
                     if idx in self._actor_registry["jet_cones"]:
-                        self._actor_registry["jet_cones"][idx]["actor"].GetProperty().SetColor(rgb_old)
+                        self._actor_registry["jet_cones"][idx]["actor"].GetProperty().SetColor(rgb_white)
                     if idx in self._actor_registry["jet_towers"]:
-                        self._actor_registry["jet_towers"][idx]["actor"].GetProperty().SetColor(rgb_old)
-                elif old_id == "missing_energy_vector" and self._actor_registry["met"]:
-                    self._actor_registry["met"]["line"].GetProperty().SetColor(rgb_old)
-                    self._actor_registry["met"]["tip"].GetProperty().SetColor(rgb_old)
+                        lego_tower = self._actor_registry["jet_towers"][idx]
+                        if isinstance(lego_tower, dict) and "actor" in lego_tower:
+                            lego_tower["actor"].GetProperty().SetColor(rgb_white)
+                        elif hasattr(lego_tower, "GetProperty"):
+                            lego_tower.GetProperty().SetColor(rgb_white)
 
-            # Application de la surbrillance
-            if mesh_id.startswith("particle_"):
-                idx = int(mesh_id.split('_')[1])
-                if idx in self._actor_registry["particles"]:
-                    self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(rgb_white)
-            elif mesh_id.startswith("jet_"):
-                idx = int(mesh_id.split('_')[1])
-                if idx in self._actor_registry["jet_cones"]:
-                    self._actor_registry["jet_cones"][idx]["actor"].GetProperty().SetColor(rgb_white)
-                if idx in self._actor_registry["jet_towers"]:
-                    self._actor_registry["jet_towers"][idx]["actor"].GetProperty().SetColor(rgb_white)
-            elif mesh_id == "missing_energy_vector" and self._actor_registry["met"]:
-                self._actor_registry["met"]["line"].GetProperty().SetColor(rgb_white)
-                self._actor_registry["met"]["tip"].GetProperty().SetColor(rgb_white)
+                self.current_selected_id = mesh_id
 
-            self.current_selected_id = mesh_id
-            
-            # Toujours cibler l'emplacement d'origine du HUD (à gauche ou affichage seul)
+            # --- MISE À JOUR COMMUNE DU CANVAS ---
             if mode in ["both", "detector"]:
                 plotter.subplot(0, 0)
                 plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color=self.theme["hud_text"], name="metadata_banner")
             plotter.render()
-
         # Activation globale unique
         self._setup_interactive_shortcuts(plotter)
         plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
@@ -417,6 +506,7 @@ class EventVisualizer:
         # Initialisation des états et registres partagés pour le picking
         self.tooltip_dict = {}
         self.current_selected_id = None
+        self._multi_select_ids = []
         self._actor_registry = {
             "particles": {},
             "jet_cones": {},
