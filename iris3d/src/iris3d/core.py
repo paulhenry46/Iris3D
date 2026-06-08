@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Tuple, List, Dict, Any, Optional
-from iris3d.models import CollisionEvent, Particle, Jet
+from .models import CollisionEvent, Particle, Jet
 
 class CoordinateTransformer:
     """
@@ -19,16 +19,16 @@ class CoordinateTransformer:
         if len(full_path) == 0:
             return None
             
-        # Calcul du rayon cylindrique de chaque point de la trace
+        # Compute the cylindrical radius for each point of the track
         radii = np.sqrt(full_path[:, 0]**2 + full_path[:, 1]**2)
         
-        # On ne garde que les points à l'intérieur du front de l'explosion
+        # Keep only points inside the expanding wavefront
         visible_indices = np.where(radii <= current_radius)[0]
         
         if len(visible_indices) == 0:
             return None
             
-        # On extrait la sous-trace visible
+        # Extract the visible sub-track
         cutoff_idx = visible_indices[-1] + 1
         return full_path[:max(2, cutoff_idx)]
     
@@ -61,7 +61,7 @@ class CoordinateTransformer:
         phi_0 = particle.phi
         eta = particle.eta
         
-        # PASSE 1 : Haute résolution mathématique pour une coupure nette au bord
+        # PASS 1: High-resolution math to get a sharp cut at detector edge
         high_res = 200
         
         if q == 0 or B_field == 0 or pt <= 0:
@@ -78,21 +78,21 @@ class CoordinateTransformer:
             raw_points[:, 1] = -(pt / (0.3 * B_field * q)) * (np.cos(phi_0 + omega * s_steps) - np.cos(phi_0))
             raw_points[:, 2] = s_steps * np.cos(theta)
         
-        # Application de la coupure physique (R-cut) sur la haute résolution
+        # Apply physical R-cut on the high-resolution points
         if r_max is not None:
             radii = np.sqrt(raw_points[:, 0]**2 + raw_points[:, 1]**2)
             outside_indices = np.where(radii > r_max)[0]
             if len(outside_indices) > 0:
                 raw_points = raw_points[:max(2, outside_indices[0])]
 
-        # PASSE 2 : Sous-échantillonnage adaptatif pour la taille des pointillés
-        # Maintenant que la ligne est coupée pile au bon endroit, on mesure sa vraie longueur
+        # PASS 2: Adaptive downsampling for dash sizing
+        # Now that the line is cut at the correct spot, measure its true length
         actual_length = np.linalg.norm(raw_points[-1] - raw_points[0]) if len(raw_points) > 0 else 0.0
         
-        # On veut environ 3 à 4 segments visibles par unité géométrique
+        # Aim for roughly 3-4 visible segments per geometric unit
         desired_points = max(4, int(actual_length * 4))
         
-        # On échantillonne uniformément la ligne haute résolution pour obtenir le nombre de points cible
+        # Uniformly sample the high-resolution line to obtain the target point count
         indices = np.linspace(0, len(raw_points) - 1, desired_points, dtype=np.int32)
         return raw_points[indices]
 
@@ -132,9 +132,9 @@ class CoordinateTransformer:
         p_scale: float = 1.0, 
         j_scale: float = 0.01, 
         B_field: float = 3.8,
-        detector_ecal_r: float = 2.0,   # Transmis par vis.py pour éviter le hardcoding
-        detector_hcal_r: float = 2.8,   # Transmis par vis.py pour éviter le hardcoding
-        detector_muon_r: float = 4.0    # Transmis par vis.py pour éviter le hardcoding
+        detector_ecal_r: float = 2.0,   # Passed from vis.py to avoid hardcoding
+        detector_hcal_r: float = 2.8,  
+        detector_muon_r: float = 4.0    
     ) -> Dict[str, Any]:
         """
         Extracts and translates a CollisionEvent or an Awkward Record into flat, 
@@ -196,7 +196,7 @@ class CoordinateTransformer:
 
         p_count = len(pts)
 
-        # --- CALCUL DE L'ÉNERGIE TRANSVERSE MANQUANTE (MET) CORRIGÉ ---
+        # --- CORRECTED MISSING TRANSVERSE ENERGY (MET) CALCULATION ---
         met_data = {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)}
 
         if p_count > 0:
@@ -214,13 +214,13 @@ class CoordinateTransformer:
             met_phi = np.arctan2(met_py, met_px)
             
             if met_pt > 0.1:
-                # 1. Calcul du vecteur MET brut à l'échelle visuelle
+                # 1. Compute the raw MET vector at visual scale
                 raw_met_x = float(met_px * p_scale)
                 raw_met_y = float(met_py * p_scale)
                 raw_met_length = np.sqrt(raw_met_x**2 + raw_met_y**2)
                 
-                # 2. PLAFOND DYNAMIQUE SANS HARDCODING
-                # On s'assure que le vecteur s'arrête au maximum au bord externe (detector_muon_r)
+                # 2. Dynamic ceiling without hardcoding
+                # Ensure the vector does not exceed the detector outer radius
                 max_allowed_length = detector_muon_r
                 
                 if raw_met_length > max_allowed_length and raw_met_length > 0:
@@ -234,7 +234,7 @@ class CoordinateTransformer:
                 met_data = {
                     "pt": float(met_pt),
                     "phi": float(met_phi),
-                    # Le vecteur 3D final est désormais bridé géométriquement
+                    # The final 3D vector is now geometrically clamped
                     "vector": (final_met_x, final_met_y, 0.0)
                 }
             
@@ -250,12 +250,12 @@ class CoordinateTransformer:
                     "name": p_name
                 })
                 
-                # --- FLEXIBILITÉ SANS HARDCODING : Routage physique des rayons max ---
-                if pid_abs in (11, 22):    # Électrons & Photons -> ECAL
+                # --- HARD-CODING FREE FLEXIBILITY: route max radii physically ---
+                if pid_abs in (11, 22):    # Electrons & Photons -> ECAL
                     assigned_r_max = detector_ecal_r
-                elif pid_abs == 13:        # Muons -> S'échappent jusqu'aux chambres externes
+                elif pid_abs == 13:        # Muons -> escape to outer chambers
                     assigned_r_max = detector_muon_r
-                else:                      # Tous les autres hadrons -> HCAL
+                else:                      # All other hadrons -> HCAL
                     assigned_r_max = detector_hcal_r
                 
                 class _TrackParams:
@@ -267,7 +267,7 @@ class CoordinateTransformer:
                 
                 p_obj = _TrackParams(pts[i], etas[i], phis[i], charges[i])
                 
-                # Transmission sécurisée du rayon maximum à la méthode de calcul
+                # Safely pass the maximum radius to the helix computation
                 path = self.particle_to_helix(p_obj, p_xyz[i], B_field=B_field, r_max=assigned_r_max)
                 p_paths.append(path)
         else:

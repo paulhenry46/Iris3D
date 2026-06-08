@@ -1,6 +1,6 @@
 import numpy as np
 import awkward as ak
-from iris3d.io import load_event
+from src.iris3d.io import load_event
 
 # =====================================================================
 # FORMAT 1: Row-Oriented Layout (Standard Python Lists & Dicts)

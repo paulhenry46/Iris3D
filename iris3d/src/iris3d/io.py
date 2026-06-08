@@ -1,7 +1,7 @@
 import numpy as np
 import dataclasses
 from typing import Dict, Any, List, Optional
-from iris3d.models import CollisionEvent, EventMetadata, Particle, Jet
+from .models import CollisionEvent, EventMetadata, Particle, Jet
 
 def _to_iterable(array_or_list: Any) -> np.ndarray:
     """

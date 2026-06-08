@@ -4,8 +4,8 @@ import awkward as ak
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from iris3d.io import load_event
-from iris3d.vis import EventVisualizer
+from src.iris3d.io import load_event
+from src.iris3d.vis import EventVisualizer
 
 # 1. Fabricate a complex simulated collision event slice using Awkward Records
 mock_hep_event = ak.Record({
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     event = load_event(mock_hep_event)
     
     print("Initializing fluid PyVista 3D event viewer...")
-    visualizer = EventVisualizer(theme_name="publication")
+    visualizer = EventVisualizer(theme="publication")
     
     # Fire up the graphics layer!
     visualizer.plot_event(event, p_scale=2.2, j_scale=0.012)

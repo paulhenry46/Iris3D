@@ -5,8 +5,8 @@ import awkward as ak
 # Configuration des chemins pour importer le package local iris3d
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from iris3d.io import load_event
-from iris3d.vis import EventVisualizer
+from src.iris3d.io import load_event
+from src.iris3d.vis import EventVisualizer
 
 # --- FABRICATION DES ÉVÉNEMENTS EXPANSIBLES ---
 mock_hep_event = ak.Record({

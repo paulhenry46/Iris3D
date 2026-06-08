@@ -27,13 +27,13 @@ def export_screenshot(visualizer, filename=None, transparent=True, force_white_b
 
     print(f"[*] Extracting 100% clean frame across all subplots (Scale x{scale_factor})...")
 
-    # 1. Sauvegarde du fond d'écran d'origine
+    # 1. Save original background
     original_bg = plotter.background_color
     
-    # 2. NETTOYAGE TOTAL DE CHAQUE SUBPLOT (RENDERER)
+    # 2. Total cleanup of each subplot (renderer)
     hidden_elements = []
     
-    # On récupère la collection complète de tous les renderers de la scène
+    # Retrieve the full collection of renderers in the scene
     renderer_collection = render_window.GetRenderers()
     renderer_collection.InitTraversal()
     
@@ -42,7 +42,7 @@ def export_screenshot(visualizer, filename=None, transparent=True, force_white_b
         if renderer is None:
             break
             
-        # A. On masque TOUS les acteurs 2D (inclut le texte orange du LEGO Plot et le HUD)
+        # A. Hide ALL 2D actors (includes LEGO Plot text and the HUD)
         for actor in renderer.GetActors2D():
             if actor.GetVisibility():
                 actor.VisibilityOff()
@@ -50,18 +50,18 @@ def export_screenshot(visualizer, filename=None, transparent=True, force_white_b
                 
         
 
-    # 3. Application des filtres de fond pour l'impression
+    # 3. Apply background filters for export
     if force_white_bg:
         plotter.set_background("white")
     elif transparent:
         plotter.set_background("white" if not visualizer.theme.get("dark", True) else "black")
 
     try:
-        # 4. Rendu isolé en mémoire
+        # 4. Off-screen render in memory
         render_window.SetOffScreenRendering(1)
         render_window.Render()
 
-        # 5. Pipeline de capture haute résolution
+        # 5. High-resolution capture pipeline
         w2if = vtk.vtkWindowToImageFilter()
         w2if.SetInput(render_window)
         w2if.SetScale(scale_factor)
@@ -74,7 +74,7 @@ def export_screenshot(visualizer, filename=None, transparent=True, force_white_b
         w2if.ReadFrontBufferOff()
         w2if.Update()
 
-        # Écriture du fichier PNG
+        # Write the PNG file
         writer = vtk.vtkPNGWriter()
         writer.SetFileName(filename)
         writer.SetInputConnection(w2if.GetOutputPort())
@@ -87,13 +87,12 @@ def export_screenshot(visualizer, filename=None, transparent=True, force_white_b
         print(f"[-] Failed to export high-res screenshot: {e}")
         
     finally:
-        # 6. RESTAURATION COMPLÈTE DE TOUS LES SUBPLOTS
+        # 6. Complete restoration of all subplots
         for element in hidden_elements:
             element.VisibilityOn()
 
-        
 
-        # Relâchement propre du mode hors-écran
+        # Properly release off-screen mode
         render_window.SetOffScreenRendering(0)
         plotter.background_color = original_bg
         
@@ -139,12 +138,12 @@ def export_interactive_video(visualizer, filename=None, *args, **kwargs):
 
     try:
         for frame_idx in range(total_frames):
-            # Progression temporelle lisse (Smooth Step)
+            # Smooth temporal progression (Smooth Step)
             t = frame_idx / (total_frames - 1)
             smooth_t = t * t * (3.0 - 2.0 * t)
             current_r = start_r + (total_range * smooth_t)
 
-            # --- MISE À ZONE GÉOMÉTRIQUE DÉTECTEUR ---
+            # --- UPDATE DETECTOR GEOMETRY ZONE ---
             if mode in ["both", "detector"]:
                 plotter.subplot(0, 0)
                 if current_r < 0:
@@ -170,39 +169,39 @@ def export_interactive_video(visualizer, filename=None, *args, **kwargs):
                     if current_r >= visualizer.detector_ecal_r:
                         ctx["calorimeter_actor"].GetProperty().SetOpacity(0.06)
 
-                    # --- INTERPOLATION CRITIQUE DES TRACES ---
+                    # --- CRITICAL TRACK INTERPOLATION ---
                     for i, (poly, full_path) in enumerate(ctx["particle_polydata_lists"]):
                         actor = ctx["particle_actors"][i]
                         distances = np.linalg.norm(full_path, axis=1)
 
-                        # Points strictement à l'intérieur du front d'onde actuel
+                        # Points strictly inside the current wavefront
                         inside_mask = distances <= current_r
                         visible_points = list(full_path[inside_mask])
 
-                        # Trouver l'indice du premier point qui sort du rayon
+                        # Find the index of the first point outside the radius
                         outside_indices = np.where(~inside_mask)[0]
 
                         if len(outside_indices) > 0 and len(visible_points) > 0:
                             next_idx = outside_indices[0]
                             prev_idx = next_idx - 1
 
-                            # Points de contrôle pour l'interpolation linéaire
+                            # Control points for linear interpolation
                             p_prev = full_path[prev_idx]
                             p_next = full_path[next_idx]
                             d_prev = distances[prev_idx]
                             d_next = distances[next_idx]
 
-                            # Calcul de la fraction exacte (interpolation entre les deux pas de simulation)
+                            # Compute exact fraction (interpolation between simulation steps)
                             if d_next != d_prev:
                                 frac = (current_r - d_prev) / (d_next - d_prev)
-                                # Point virtuel exact situé pile sur la sphère de rayon current_r
+                                # Exact virtual point located on the sphere of radius current_r
                                 exact_front_point = p_prev + frac * (p_next - p_prev)
                                 visible_points.append(exact_front_point)
 
-                        # Rendu de la spline lissée sur le set de points complété
+                        # Render the smoothed spline over the completed point set
                         if len(visible_points) > 1:
                             actor.SetVisibility(True)
-                            # On augmente la densité de points de la spline pour lisser les angles
+                            # Increase spline point density to smooth angles
                             new_spline = pv.Spline(np.array(visible_points), n_points=max(20, len(visible_points) * 3))
                             actor.mapper.dataset.copy_from(new_spline)
                             actor.mapper.dataset.Modified()
@@ -214,7 +213,7 @@ def export_interactive_video(visualizer, filename=None, *args, **kwargs):
                         if ctx["met_actor_line"]: ctx["met_actor_line"].SetVisibility(True)
                         if ctx["met_actor_tip"]: ctx["met_actor_tip"].SetVisibility(True)
 
-            # --- MISE À JOUR LEGO PLOT ---
+            # --- LEGO PLOT UPDATE ---
             if mode in ["both", "lego"]:
                 v_current_r = current_r if mode == "both" else (current_r + 3.0)
                 plotter.subplot(0, 0) if mode == "lego" else plotter.subplot(0, 1)
@@ -265,12 +264,12 @@ def export_html(visualizer, filename=None, force_clean_scene=True, force_white_b
 
     print(f"[*] Packaging 100% responsive WebGL asset across all views...")
 
-    # 1. Sauvegarde de l'environnement graphique d'origine
+    # 1. Save original graphical environment
     original_bg = plotter.background_color
     hidden_elements = []
 
-    # 2. NETTOYAGE CLINIQUE DE CHAQUE SUBPLOT (RENDERER) SI REQUIS
-    # Évite les artefacts de police/widgets 2D statiques figés dans le maillage HTML
+    # 2. Clinical cleanup of each subplot (renderer) if required
+    # Avoid font/widget artifacts frozen into the HTML mesh
     if force_clean_scene:
         renderer_collection = render_window.GetRenderers()
         renderer_collection.InitTraversal()
@@ -280,22 +279,22 @@ def export_html(visualizer, filename=None, force_clean_scene=True, force_white_b
             if renderer is None:
                 break
                 
-            # Masquage des étiquettes de texte, bannières de métadonnées et HUD
+            # Hide text labels, metadata banners and HUD
             for actor in renderer.GetActors2D():
                 if actor.GetVisibility():
                     actor.VisibilityOff()
                     hidden_elements.append(actor)
 
-    # 3. Adaptation du fond pour l'exposition Web
+    # 3. Adjust background for web exposure
     if force_white_bg:
         plotter.set_background("white")
 
     try:
-        # En VTK/PyVista, l'export de scènes composites passe par l'exporteur de scène natif
-        # qui sérialise la scène géométrique globale au format HTML standardisé
+        # In VTK/PyVista, exporting composite scenes uses the native scene exporter
+        # which serializes the global geometric scene into a standard HTML package
         print(f"[*] Compiling WebGL geometries to standalone HTML document...")
         
-        # 4. Génération et écriture du fichier HTML autonome via le moteur d'export PyVista
+        # 4. Generate and write the standalone HTML file via PyVista exporter
         plotter.export_html(filename)
         
         print(f"[+] Interactive 3D event deployment ready: {filename}")
@@ -305,12 +304,12 @@ def export_html(visualizer, filename=None, force_clean_scene=True, force_white_b
         print(f"[-] Failed to export interactive HTML framework: {e}")
         
     finally:
-        # 5. RESTAURATION INTÉGRALE DE LA SÉQUENCE INTERACTIVE
+        # 5. Full restoration of the interactive sequence
         if force_clean_scene:
             for element in hidden_elements:
                 element.VisibilityOn()
 
-        # Restauration du fond d'écran du visualiseur
+        # Restore visualizer background
         plotter.background_color = original_bg
         plotter.render()
         

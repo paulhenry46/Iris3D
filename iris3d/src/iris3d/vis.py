@@ -1,9 +1,9 @@
 import numpy as np
 import pyvista as pv
 from typing import Optional
-from iris3d.models import CollisionEvent
-from iris3d.core import CoordinateTransformer
-from iris3d.themes import THEMES
+from .models import CollisionEvent
+from .core import CoordinateTransformer
+from .themes import THEMES
 
 class EventVisualizer:
     """
@@ -11,21 +11,27 @@ class EventVisualizer:
     GPU-accelerated 3D canvas using PyVista (VTK), featuring interactive
     picking tooltips, realistic magnetic field bending, and style-coded tracks.
     """
-    def __init__(self, theme_name: str = "cyberpunk"):
+    def __init__(self, theme: str | dict = "cyberpunk"):
         self.transformer = CoordinateTransformer()
-        self.current_selected_id = None  # Tracker pour l'objet actuellement sélectionné
+        self.current_selected_id = None  # Tracker for the currently selected object
         self.calorimeter_outer_radius = 2.8
-        self.detector_ecal_r = 1.75      # Bord externe exact du calorimètre
+        self.detector_ecal_r = 1.75      # Exact outer edge of the calorimeter
         self.detector_muon_r = 4.0
         self.tracker_radius = 1.5
         self.tracker_length = 5.0
 
-        if theme_name not in THEMES:
-            print(f"[Iris3D CORE] Warning: Theme '{theme_name}' not found. Falling back to 'cyberpunk'.")
-            theme_name = "cyberpunk"
-        
-        # 2. Copie locale du blueprint pour accès direct et ultra-rapide
-        self.theme = THEMES[theme_name]
+        # --- MANAGEMENT OF CONFIGURABLE AND CUSTOM THEMES ---
+        if isinstance(theme, dict):
+            # User injects their own color dictionary
+            print("[Iris3D CORE] Loading custom user-defined theme dictionary.")
+            # Apply minimal validation to avoid KeyError later
+            self.theme = self._validate_and_pad_theme(theme)
+        else:
+            # User requests a theme from the catalog by name
+            if theme not in THEMES:
+                print(f"[Iris3D CORE] Warning: Theme '{theme}' not found. Falling back to 'cyberpunk'.")
+                theme = "cyberpunk"
+            self.theme = THEMES[theme].copy()
 
         if self.theme['dark']:
             pv.set_plot_theme("dark")
@@ -70,7 +76,7 @@ class EventVisualizer:
         import numpy as np
         import pyvista as pv
 
-        # 1. Détermination du layout de la fenêtre
+        # 1. Determine the window layout
         if mode == "both":
             plotter = pv.Plotter(window_size=[1500, 750], shape=(1, 2), title=f"Iris3D - Dual Dynamic Display")
         elif mode in ["detector", "lego"]:
@@ -78,7 +84,7 @@ class EventVisualizer:
         else:
             raise ValueError("Invalid mode. Choose from 'both', 'detector', or 'lego'.")
 
-        # 2. Extraction sécurisée des métadonnées pour l'affichage
+        # 2. Safely extract metadata for display
         try:
             run_id = getattr(event.metadata, "run_id", "N/A")
             event_id = getattr(event.metadata, "event_id", "N/A")
@@ -89,7 +95,7 @@ class EventVisualizer:
             except Exception:
                 run_id, event_id = "N/A", "N/A"
 
-        # 3. Initialisation des états partagés (Attributs d'instance pour le picking)
+        # 3. Initialize shared states (instance attributes for picking)
         self.tooltip_dict = {}
         self.current_selected_id = None
         self._multi_select_ids = []
@@ -100,9 +106,9 @@ class EventVisualizer:
             "met": {}
         }
         
-        self._jet_picking_mode = False  # False = Sélection Particules, True = Sélection Jets
+        self._jet_picking_mode = False  # False = Particle selection, True = Jet selection
 
-        # 4. Pipeline de géométrie
+        # 4. Geometry pipeline
         spatial_data = self.transformer.extract_event_arrays(
             event, p_scale=p_scale, j_scale=j_scale, B_field=B_field,
             detector_ecal_r=self.detector_ecal_r,
@@ -110,7 +116,7 @@ class EventVisualizer:
             detector_muon_r=self.detector_muon_r
         )
 
-        # 5. Remplissage des Subplots selon la configuration
+        # 5. Populate subplots according to configuration
         if mode == "both":
             self._plot_3d_detector(plotter, spatial_data, event=event, run_id=run_id, event_id=event_id, is_cinematic=False, subplot_idx=(0, 0))
             
@@ -120,8 +126,8 @@ class EventVisualizer:
         elif mode == "lego":
             self._plot_lego_calorimeter(plotter, spatial_data, event=event, is_cinematic=False, subplot_idx=(0, 1))
 
-        # 6. Injection de la logique de picking unifiée
-        # 6. Logiciel de Picking Unifié + Calculateur de Masse Invariante (Shift + Clic)
+        # 6. Inject unified picking logic
+        # 6. Unified Picking Logic + Invariant Mass Calculator (Shift + Click)
         def picking_callback(mesh):
             if not mesh or "mesh_id" not in mesh.field_data:
                 return
@@ -133,23 +139,23 @@ class EventVisualizer:
             hud_text, orig_color_name = self.tooltip_dict[mesh_id]
             rgb_white = (1.0, 1.0, 1.0)
             
-            # --- ÉTAPE A : DÉTECTION DU MODE (SHIFT ENFONCÉ OU NON) ---
-            # PyVista permet de vérifier l'état du clavier via le plotter
+            # --- STEP A: DETECT MODE (SHIFT PRESSED OR NOT) ---
+            # PyVista allows checking keyboard state via the plotter
             shift_pressed = plotter.iren.interactor.GetShiftKey()
 
             if shift_pressed and mesh_id.startswith("particle_"):
-                # --- MODE ANALYSE MULTI-PARTICULES ---
+                # --- MULTI-PARTICLE ANALYSIS MODE ---
                 p_idx = int(mesh_id.split('_')[1])
                 
-                # Éviter les doublons dans la sélection
+                # Avoid duplicates in the selection
                 if mesh_id not in self._multi_select_ids:
                     self._multi_select_ids.append(mesh_id)
-                    # Coloration flash de la particule sélectionnée pour l'analyse
+                    # Flash-color the selected particle for analysis
                     if p_idx in self._actor_registry["particles"]:
                         self._actor_registry["particles"][p_idx]["actor"].GetProperty().SetColor((0.0, 1.0, 1.0)) # Cyan pour l'analyse
                         self._actor_registry["particles"][p_idx]["actor"].GetProperty().SetLineWidth(6)
                 
-                # Si on a collecté 2 particules, on lance le calcul de physique
+                # If two particles have been collected, run the physics calculation
                 if len(self._multi_select_ids) == 2:
                     id1, id2 = self._multi_select_ids[0], self._multi_select_ids[1]
                     idx1, idx2 = int(id1.split('_')[1]), int(id2.split('_')[1])
@@ -157,19 +163,19 @@ class EventVisualizer:
                     p1_data = self._actor_registry["particles"][idx1]
                     p2_data = self._actor_registry["particles"][idx2]
                     
-                    # Dictionnaire des masses au repos standards (en GeV)
+                    # Standard rest-mass dictionary (in GeV)
                     mass_map = {11: 0.000511, 13: 0.10566, 211: 0.13957, 22: 0.0} # e, mu, pi+/-, photon
                     
-                    # Extraction des cinématiques
+                    # Extract kinematics
                     pt1, eta1, phi1 = p1_data["pt"], p1_data["eta"], p1_data["phi"]
                     pt2, eta2, phi2 = p2_data["pt"], p2_data["eta"], p2_data["phi"]
                     
-                    pid1 = p1_data.get("pid", 13) # Muon par défaut si non spécifié
+                    pid1 = p1_data.get("pid", 13) # Default to muon if unspecified
                     pid2 = p2_data.get("pid", 13)
-                    m1 = mass_map.get(abs(int(pid1)), 0.139) # par défaut masse du pion si inconnu
+                    m1 = mass_map.get(abs(int(pid1)), 0.139) # default to pion mass if unknown
                     m2 = mass_map.get(abs(int(pid2)), 0.139)
                     
-                    # Reconstruction des quadri-vecteurs
+                    # Reconstruct four-vectors
                     px1, py1, pz1 = pt1 * np.cos(phi1), pt1 * np.sin(phi1), pt1 * np.sinh(eta1)
                     p1_mag = np.sqrt(px1**2 + py1**2 + pz1**2)
                     E1 = np.sqrt(p1_mag**2 + m1**2)
@@ -178,20 +184,20 @@ class EventVisualizer:
                     p2_mag = np.sqrt(px2**2 + py2**2 + pz2**2)
                     E2 = np.sqrt(p2_mag**2 + m2**2)
                     
-                    # Calculs finaux de la résonance
+                    # Final resonance calculations
                     sum_E = E1 + E2
                     sum_px, sum_py, sum_pz = px1 + px2, py1 + py2, pz1 + pz2
                     m_inv2 = sum_E**2 - (sum_px**2 + sum_py**2 + sum_pz**2)
                     m_inv = np.sqrt(max(0.0, m_inv2))
                     
-                    # Calcul du Delta R
+                    # Calculate Delta R
                     d_eta = eta1 - eta2
                     d_phi = phi1 - phi2
                     while d_phi > np.pi:  d_phi -= 2.0 * np.pi
                     while d_phi < -np.pi: d_phi += 2.0 * np.pi
                     delta_R = np.sqrt(d_eta**2 + d_phi**2)
                     
-                    # Formatage du HUD d'Analyse Relativiste
+                    # Format the Relativistic Analysis HUD
                     hud_text = (
                         f"========================================\n"
                         f" KINEMATIC RESONANCE ANALYSIS       \n"
@@ -204,15 +210,15 @@ class EventVisualizer:
                         f"========================================"
                     )
                     
-                    # Reset de la liste pour la prochaine analyse
+                    # Reset the list for the next analysis
                     self._multi_select_ids = []
                     
                 else:
-                    hud_text = f" -> Particule #{p_idx} sélectionnée pour analyse.\n Maintenez [SHIFT] et cliquez sur une 2ème particule..."
+                    hud_text = f" -> Particle #{p_idx} selected for analysis.\n Hold [SHIFT] and click a second particle..."
 
             else:
-                # --- MODE CLIC CLASSIQUE SINGLE-OBJECT ---
-                # Si l'utilisateur clique normalement, on reset le mode analyse et ses couleurs cyan
+                # --- CLASSIC SINGLE-OBJECT CLICK MODE ---
+                # If user clicks normally, reset multi-selection mode and cyan colors
                 for old_id in self._multi_select_ids:
                     idx = int(old_id.split('_')[1])
                     if idx in self._actor_registry["particles"]:
@@ -220,7 +226,7 @@ class EventVisualizer:
                         self._actor_registry["particles"][idx]["actor"].GetProperty().SetColor(pv.Color(col).float_rgb)
                 self._multi_select_ids = []
 
-                # Application du comportement standard de nettoyage / reset précédent
+                    # Apply standard cleanup/reset behavior
                 if self.current_selected_id:
                     old_id = self.current_selected_id
                     _, old_color_name = self.tooltip_dict[old_id]
@@ -241,7 +247,7 @@ class EventVisualizer:
                             elif hasattr(lego_tower, "GetProperty"):
                                 lego_tower.GetProperty().SetColor(rgb_old)
 
-                # Application de la surbrillance blanche sur l'élément unique cliqué
+                # Apply white highlight to the single clicked item
                 if mesh_id.startswith("particle_"):
                     idx = int(mesh_id.split('_')[1])
                     if idx in self._actor_registry["particles"]:
@@ -259,19 +265,19 @@ class EventVisualizer:
 
                 self.current_selected_id = mesh_id
 
-            # --- MISE À JOUR COMMUNE DU CANVAS ---
+            # --- COMMON CANVAS UPDATE ---
             if mode in ["both", "detector"]:
                 plotter.subplot(0, 0)
                 plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color=self.theme["hud_text"], name="metadata_banner")
             plotter.render()
-        # --- FILTRE DE SELECTION INTERACTIF (INTERRUPTEUR) ---
+        # --- INTERACTIVE SELECTION FILTER (TOGGLE) ---
         def custom_picking_filter(mesh):
             if not mesh or "mesh_id" not in mesh.field_data:
                 return
             
             mesh_id = mesh.field_data["mesh_id"][0]
             
-            # FILTRAGE LOGIQUE SELON LE MODE DE L'INTERRUPTEUR
+            # Logical filtering according to the toggle mode
             if self._jet_picking_mode:
                 if mesh_id.startswith("particle_"):
                     return
@@ -281,19 +287,19 @@ class EventVisualizer:
             
             picking_callback(mesh)
 
-        # --- FONCTION INTERRUPTEUR DÉCLENCHÉE PAR LA TOUCHE 'C' ---
+        # --- TOGGLE FUNCTION TRIGGERED BY KEY 'C' ---
         def toggle_picking_mode():
             # 1. Inversion du mode (Toggle)
             self._jet_picking_mode = not self._jet_picking_mode
             
-            # 2. MODIFICATION PHYSIQUE DE L'INTERCEPTION VTK
-            # Si on est en mode particules (False), les cônes DOIVENT devenir transparents aux clics (Pickable=False)
-            # Si on est en mode jets (True), les cônes redeviennent interceptables (Pickable=True)
+            # 2. Physically modify VTK pickability
+            # If in particle mode (False), cones MUST become non-pickable (Pickable=False)
+            # If in jet mode (True), cones become pickable again (Pickable=True)
             for jet_idx, jet_data in self._actor_registry["jet_cones"].items():
                 if "actor" in jet_data:
                     jet_data["actor"].SetPickable(self._jet_picking_mode)
             
-            # 3. Détermination du message du HUD selon le mode
+            # 3. Determine HUD message according to the mode
             if self._jet_picking_mode:
                 status_text = " MODE SELECTION ACTIVE : JETS"
                 color_hud = (255, 140, 0) # Orange pour les jets
@@ -301,7 +307,7 @@ class EventVisualizer:
                 status_text = " MODE SELECTION ACTIVE : PARTICULES"
                 color_hud = self.theme["hud_text"]
                 
-            # 4. Mise à jour instantanée du texte à l'écran
+            # 4. Instant update of on-screen text
             if mode in ["both", "detector"]:
                 plotter.subplot(0, 0)
                 plotter.add_text(
@@ -314,16 +320,16 @@ class EventVisualizer:
                 )
             plotter.render()
 
-        # Enregistrement de l'événement clavier sur la touche 'c'
+        # Register key event for key 'c'
         plotter.add_key_event("c", toggle_picking_mode)
 
-        # --- INITIALISATION DE L'ÉTAT PAR DÉFAUT DES CÔNES ---
-        # Au lancement, on force les cônes à être non-cliquables pour libérer l'accès aux traces
+        # --- INITIALIZE DEFAULT STATE OF CONES ---
+        # On startup, force cones to be non-pickable to free access to tracks
         for jet_idx, jet_data in self._actor_registry["jet_cones"].items():
             if "actor" in jet_data:
                 jet_data["actor"].SetPickable(False)
 
-        # Activation globale via notre filtre de mode
+        # Global activation via our mode filter
         self._setup_interactive_shortcuts(plotter)
         plotter.enable_mesh_picking(callback=custom_picking_filter, show=False, left_clicking=True, show_message=False)
         plotter.show()
@@ -342,9 +348,9 @@ class EventVisualizer:
         plotter.show_grid(color=self.theme["grid_color"])                     
         plotter.enable_anti_aliasing("msaa", multi_samples=4)  
         
-        # 1. GÉOMÉTRIE DU DÉTECTEUR ET INFRASTRUCTURE DE FOND
+        # 1. DETECTOR GEOMETRY AND BACKGROUND INFRASTRUCTURE
         if is_cinematic and ctx is not None:
-            # Éléments passifs spécifiques à l'animation
+            # Passive elements specific to the animation
             ctx["calorimeter_mesh"] = pv.Cylinder(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), radius=self.calorimeter_outer_radius, height=6.0, resolution=50)
             ctx["calorimeter_actor"] = plotter.add_mesh(ctx["calorimeter_mesh"], color=self.theme["detector_ecal"], opacity=0.02, style="surface", show_edges=True, edge_color=self.theme["detector_ecal_edge"])
 
@@ -368,7 +374,7 @@ class EventVisualizer:
             ctx["particle_polydata_lists"] = []
             ctx["jet_actors"] = []
         else:
-            # Mode statique : Géométrie simplifiée par défaut
+            # Static mode: simplified geometry by default
             self._add_detector_geometry(plotter)
             vertex = pv.Sphere(radius=0.05, center=(0.0, 0.0, 0.0))
             plotter.add_mesh(vertex, color=self.theme["vertex_static"], render_points_as_spheres=True, label="Interaction Vertex")
@@ -376,7 +382,7 @@ class EventVisualizer:
         p_meta = spatial_data["particle_metadata"]
         p_paths = spatial_data["particle_paths"]
 
-        # 2. RENDU ET ALLOCATION DES TRACES DE PARTICULES
+        # 2. Rendering and allocation of particle tracks
         for i in range(len(p_paths)):
             points = p_paths[i]
             metadata = p_meta[i]
@@ -384,7 +390,7 @@ class EventVisualizer:
             p_pid = metadata.get("pid", 0)
             p_charge = metadata.get("charge", 0)
             
-            # Parsing sécurisé des propriétés cinématiques
+            # Safe parsing of kinematic properties
             try:
                 source_particle = event.particles[i] if event else None
                 pt_val, eta_val, phi_val = source_particle.pt, source_particle.eta, source_particle.phi
@@ -396,12 +402,12 @@ class EventVisualizer:
                 except Exception:
                     pt_val, eta_val, phi_val = 0.0, 0.0, 0.0
             
-            # Génération du Mesh topologique de la trace
+            # Generate topological mesh for the track
             if p_charge != 0:
                 track_mesh = pv.Spline(points, len(points))
             else:
                 track_mesh = pv.PolyData(points)
-                if p_pid == 22:  # Photons (Ligne pointillée via connectivité segmentée)
+                if p_pid == 22:  # Photons (dashed line via segmented connectivity)
                     lines_connectivity = []
                     for idx in range(0, len(points) - 1, 2):
                         lines_connectivity.extend([2, idx, idx + 1])
@@ -413,7 +419,7 @@ class EventVisualizer:
             color = self._get_particle_color(p_pid)
             mesh_id = f"particle_{i}"
             
-            # Enregistrement des chaînes HUD dans le registre d'infobulles
+            # Register HUD strings in the global tooltip registry
             self.tooltip_dict[mesh_id] = ((
                 f">> INSPECTING TARGET: PARTICLE TRACK #{i}\n----------------------------------------\n"
                 f" Identity    : {p_name} (PDG: {p_pid})\n Momentum pT : {pt_val:.2f} GeV\n"
@@ -421,7 +427,7 @@ class EventVisualizer:
             ), color)
             track_mesh.field_data["mesh_id"] = [mesh_id]
             
-            # Paramètres d'affichage sélectifs
+            # Selective display parameters
             lw = 4 if p_charge != 0 else (2.5 if p_pid == 22 else 1.5)
             op = 1.0 if p_charge != 0 else (0.9 if p_pid == 22 else 0.5)
             
@@ -441,7 +447,7 @@ class EventVisualizer:
                     "phi": phi_val
                 }
 
-        # 3. RENDU DES CÔNES DE JETS
+        # 3. Rendering of jet cones
         for i, jet_geo in enumerate(spatial_data["jet_geometries"]):
             direction = np.array(jet_geo["unit_direction"])
             length, radius = jet_geo["length"], jet_geo["radius"]
@@ -477,15 +483,15 @@ class EventVisualizer:
             #self._actor_registry["jet_cones"][i] = act
             self._actor_registry["jet_cones"][i] = {
                 "actor": act,
-                "pt": j_energy,       # ou jet_energy selon tes données
+                "pt": j_energy,       # or jet_energy depending on your data
                 "eta": j_eta,
                 "phi": j_phi
             }
 
-        # 4. RENDU DE L'ÉNERGIE MANQUANTE (MET)
+        # 4. Rendering of Missing Transverse Energy (MET)
         met_data = spatial_data.get("missing_energy", {"pt": 0.0, "phi": 0.0, "vector": (0.0, 0.0, 0.0)})
         
-        # Initialisation sécurisée des variables locales pour l'animation
+        # Safe initialization of local variables for animation
         if is_cinematic and ctx is not None:
             ctx["met_actor_line"] = None
             ctx["met_actor_tip"] = None
@@ -524,7 +530,7 @@ class EventVisualizer:
                 
             self._actor_registry["met"] = {"line": act_line, "tip": act_tip}
 
-        # 5. RAFFRAÎCHISSEMENT INTERFACE ET TEXTES HUD
+        # 5. Interface refresh and HUD texts
         if not is_cinematic:
             plotter.add_text(
                 f"IRIS3D // EVENT DETECTOR HUD ACTIVE\n-----------------------------------\nRun ID : {run_id} | Event ID : {event_id}\n\nSelect sub-atomic signature to decode...", 
@@ -532,7 +538,7 @@ class EventVisualizer:
             )
             plotter.add_legend(bcolor=None, face="circle")
             
-        # À la fin de _plot_3d_detector, juste avant le réglage caméra :
+        # At the end of _plot_3d_detector, just before camera setup:
         if not is_cinematic:
             self._add_filter_widgets(plotter)
             
@@ -548,7 +554,7 @@ class EventVisualizer:
         import numpy as np
         import pyvista as pv
 
-        # 1. Configuration des fenêtres selon le mode choisi
+        # 1. Configure windows according to the chosen mode
         if mode == "both":
             plotter = pv.Plotter(window_size=[1500, 750], shape=(1, 2), title="Iris3D - Dual Cinematic Display & Lego Plot")
         elif mode in ["detector", "lego"]:
@@ -556,7 +562,7 @@ class EventVisualizer:
         else:
             raise ValueError("Invalid mode. Choose from 'both', 'detector', or 'lego'.")
 
-        # Extraction globale unique des données spatiales
+        # Single global extraction of spatial data
         spatial_data = self.transformer.extract_event_arrays(
             event, p_scale=p_scale, j_scale=j_scale, B_field=B_field,
             detector_ecal_r=self.detector_ecal_r,
@@ -564,7 +570,7 @@ class EventVisualizer:
             detector_muon_r=self.detector_muon_r
         )
 
-        # Initialisation des états et registres partagés pour le picking
+        # Initialize shared states and registries for picking
         self.tooltip_dict = {}
         self.current_selected_id = None
         self._multi_select_ids = []
@@ -575,16 +581,16 @@ class EventVisualizer:
             "met": {}
         }
 
-        # Conteneurs d'animation internes
+        # Internal animation containers
         ctx = {}
 
-        # Sauvegarde des pointeurs pour le module d'exportation vidéo
+        # Save pointers for the video export module
         self._current_ctx = ctx
         self._current_mode = mode
         self._current_spatial_data = spatial_data
         self._active_plotter = plotter 
 
-        # 2. Routage et initialisation des subplots
+        # 2. Routing and initialization of subplots
         if mode == "both":
             self._plot_3d_detector(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 0))
             self._plot_lego_calorimeter(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 1))
@@ -593,7 +599,7 @@ class EventVisualizer:
         elif mode == "lego":
             self._plot_lego_calorimeter(plotter, spatial_data, event=event, ctx=ctx, is_cinematic=True, subplot_idx=(0, 1))
 
-        # Gestion de l'état du clavier
+        # Keyboard state management
         self._setup_interactive_shortcuts(plotter)
         state = {"is_paused": False}
         plotter.add_key_event('space', lambda: state.update({"is_paused": not state["is_paused"]}))
@@ -603,11 +609,11 @@ class EventVisualizer:
         max_r = self.detector_muon_r
         current_r = -3.0  
 
-        # Pre-calcul des distances pour s'affranchir de la surcharge CPU dans la boucle standard
+        # Precompute distances to avoid CPU overhead in the main loop
         track_distances = [np.linalg.norm(full_path, axis=1) for _, full_path in ctx["particle_polydata_lists"]]
 
         # ==========================================================
-        # BOUCLE DE RENDU OPTIMISÉE (INTERPOLATION EN DIRECT)
+        # OPTIMIZED RENDER LOOP (ON-THE-FLY INTERPOLATION)
         # ==========================================================
         while plotter.render_window is not None:
             if not hasattr(plotter, 'iren') or plotter.iren is None or plotter.render_window.GetInteractor().GetDone():
@@ -618,7 +624,7 @@ class EventVisualizer:
                 if current_r > max_r + 0.5:
                     current_r = -3.0  
 
-            # --- MISE À UPDATE : SUBPLOT GAUCHE (DÉTECTEUR) ---
+            # --- UPDATE LEFT SUBPLOT (DETECTOR) ---
             if mode in ["both", "detector"]:
                 plotter.subplot(0, 0)
                 
@@ -649,7 +655,7 @@ class EventVisualizer:
                     status_txt = "STATUS: PAUSED" if state["is_paused"] else "Status: STEERING PACKETS"
                     ctx["hud"].SetInput(f"IRIS3D // LHC BEAMS APPROACHING\n-------------------------------------------\n{status_txt}")
                     
-                else:  # Phase de Collision (Avec Interpolation Continue Intégrée)
+                else:  # Collision phase (with continuous interpolation)
                     ctx["beam1_actor"].SetVisibility(False)
                     ctx["beam2_actor"].SetVisibility(False)
                     ctx["vertex_actor"].GetProperty().SetColor(pv.Color("white" if current_r < 0.2 else "magenta").float_rgb)
@@ -668,7 +674,7 @@ class EventVisualizer:
                         ctx["calorimeter_actor"].GetProperty().SetEdgeColor(pv.Color("firebrick").float_rgb)
                         ctx["shockwave_actor"].SetVisibility(False)
 
-                    # INTERPOLATION VECTORIELLE DES TRACES EN DIRECT
+                    # On-the-fly vector interpolation of tracks
                     for i, (poly, full_path) in enumerate(ctx["particle_polydata_lists"]):
                         actor = ctx["particle_actors"][i]
                         distances = track_distances[i]
@@ -692,14 +698,14 @@ class EventVisualizer:
                         
                         if len(visible_points) > 1:
                             actor.SetVisibility(True)
-                            # Calcul de spline à haute définition pour amortir les virages géométriques
+                            # High-definition spline computation to smooth geometric turns
                             new_spline = pv.Spline(np.array(visible_points), n_points=max(15, len(visible_points) * 2))
                             actor.mapper.dataset.copy_from(new_spline)
                             actor.mapper.dataset.Modified()
                         else:
                             actor.SetVisibility(False)
 
-                    # Apparition progressive des cônes
+                    # Gradual appearance of cones
                     if current_r >= self.tracker_radius:
                         for i, act in enumerate(ctx["jet_actors"]):
                             act.SetVisibility(True)
@@ -707,7 +713,7 @@ class EventVisualizer:
                     else:
                         for act in ctx["jet_actors"]: act.SetVisibility(False)
 
-                    # Énergie manquante (MET)
+                    # Missing transverse energy (MET)
                     if spatial_data.get("missing_energy", {}).get("pt", 0.0) > 0.5 and current_r >= self.calorimeter_outer_radius + 1:
                         if ctx["met_actor_line"]: ctx["met_actor_line"].SetVisibility(True)
                         if ctx["met_actor_tip"]: ctx["met_actor_tip"].SetVisibility(True)
@@ -718,7 +724,7 @@ class EventVisualizer:
                     state_label = "|| PAUSED" if state["is_paused"] else ('TRACKING CORE' if current_r < self.detector_ecal_r else 'CALORIMETER SHOWER')
                     ctx["hud"].SetInput(f"IRIS3D // TIME-OF-FLIGHT SIMULATION ACTIVE\n-------------------------------------------\nWavefront Radius : {current_r:.2f} meters\nSub-atomic State : {state_label}")
 
-            # --- MISE À UPDATE : SUBPLOT DROIT (LEGO PLOT) ---
+            # --- UPDATE RIGHT SUBPLOT (LEGO PLOT) ---
             if mode in ["both", "lego"]:
                 v_current_r = current_r if mode == "both" else (current_r + 3.0)
                 
@@ -746,7 +752,7 @@ class EventVisualizer:
 
             plotter.update(16, force_redraw=True)
 
-        # 3. INTERACTION APRÈS FIN DE LA SIMULATION (CROSS-PICKING ACTIF)
+        # 3. Interaction after simulation end (cross-picking active)
         def picking_callback(mesh):
             if not mesh or "mesh_id" not in mesh.field_data:
                 return
@@ -808,7 +814,7 @@ class EventVisualizer:
         title_type = "LEGO PLOT" if is_cinematic else "STATIC LEGO PLOT"
         plotter.add_text(f"CALORIMETER METRIC ({title_type})", position=(0.05, 0.92), font_size=12, font="courier", color=self.theme["lego_title"], name="lego_title")
         
-        # 1. RENDU DE L'ENVIRONNEMENT ET DES AXES (Commun)
+        # 1. RENDER ENVIRONMENT AND AXES (Common)
         lego_floor = pv.Plane(center=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0), i_size=6.0, j_size=2 * np.pi)
         plotter.add_mesh(lego_floor, color=self.theme["lego_floor"], style="surface", show_edges=True, edge_color=self.theme["lego_floor_edge"], pickable=False)
         
@@ -817,12 +823,12 @@ class EventVisualizer:
         plotter.add_point_labels(np.array([[-3.3, -np.pi, 0.01], [-3.3, 0.0, 0.01], [-3.3, np.pi, 0.01]]), ["phi = -pi", "phi = 0", "phi = +pi"], font_family="courier", font_size=12, show_points=False)
         plotter.add_mesh(pv.Line([-3.2, -np.pi, 0.01], [-3.2, np.pi, 0.01]), color=self.theme["lego_title"], line_width=2, pickable=False)
 
-        # 2. COLLECTE DES ÉNERGIES ET NORMALISATION DE L'ÉCHELLE (Commun)
+        # 2. COLLECT ENERGIES AND NORMALIZE SCALE (Common)
         jet_geometries = spatial_data.get("jet_geometries", [])
         jet_energies = []
         for i, jet_geo in enumerate(jet_geometries):
             try:
-                # Priorité au format Event dict/object, sinon fallback géométrique
+                # Prefer Event dict/object format, otherwise geometric fallback
                 j_energy = float(event["jets"]["energy"][i]) if event else jet_geo.get("pt", jet_geo.get("energy"))
             except Exception:
                 try: j_energy = event.jets[i].energy if event else jet_geo["length"] * 10.0
@@ -833,12 +839,12 @@ class EventVisualizer:
         max_e = max(jet_energies) if len(jet_energies) > 0 else 1.0
         v_scale = max_allowed_height / max_e  
 
-        # Initialisation des listes du contexte si mode cinématique actif
+        # Initialize context lists if cinematic mode is active
         if is_cinematic and ctx is not None:
             ctx["lego_mesh_references"] = []
             ctx["max_heights"] = []
 
-        # 3. CONSTRUCTION DES TOURS LEGO
+        # 3. BUILD THE LEGO TOWERS
         for i, jet_geo in enumerate(jet_geometries):
             direction = np.array(jet_geo["unit_direction"])
             eta = jet_geo.get("eta", direction[2] * 1.5)
@@ -847,27 +853,27 @@ class EventVisualizer:
             pt_energy = jet_energies[i]
             final_height = pt_energy * v_scale  
 
-            # Détermination de la géométrie de départ selon le mode
+            # Determine starting geometry according to mode
             current_height = 1.0 if is_cinematic else final_height
             lego_box = pv.Box(bounds=[eta - 0.18, eta + 0.18, phi - 0.18, phi + 0.18, 0.0, current_height])
             
             mesh_id = f"jet_{i}"
             lego_box.field_data["mesh_id"] = [mesh_id]
             
-            # Injection sécurisée dans le dictionnaire de tooltips globaux
+            # Safely inject into the global tooltip dictionary
             if mesh_id not in self.tooltip_dict:
                 self.tooltip_dict[mesh_id] = (f">> INSPECTING RECONSTRUCTED JET #{i}\n Transverse E : {pt_energy:.2f} GeV", "orange")
 
-            # Ajout au plotter
+            # Add to the plotter
             act = plotter.add_mesh(lego_box, color=self.theme["jet_tower"], opacity=1, show_edges=True, edge_color=self.theme["jet_tower_edge"], name=f"lego_tower_{i}")
             
-            # Application de la logique spécifique au mode
+            # Apply mode-specific logic
             if is_cinematic and ctx is not None:
                 act.SetVisibility(False)
                 ctx["lego_mesh_references"].append((lego_box, lego_box.points.copy()))
                 ctx["max_heights"].append(final_height)
             
-            # Enregistrement dans le registre central (Crucial pour la synchro)
+            # Register in the central registry (crucial for synchronization)
             #self._actor_registry["jet_towers"][i] = act
 
             self._actor_registry["jet_towers"][i] = {
@@ -877,7 +883,7 @@ class EventVisualizer:
                 "phi": phi
             }
 
-        # 4. CADRAGE CAMÉRA ADJUSTÉ SELON LE MODE
+        # 4. CAMERA FRAMING ADJUSTED ACCORDING TO MODE
         if is_cinematic:
             plotter.camera_position = [(0.0, -0.01, 9.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
             plotter.camera.zoom(0.72)
@@ -893,25 +899,24 @@ class EventVisualizer:
         """
         import numpy as np
 
-        # 1. FILTRAGE DES PARTICULES (MODE GHOST)
-        # 1. FILTRAGE DES PARTICULES (MODE GHOST + ANTI-PICKING)
+        # 1. PARTICLE FILTERING (GHOST MODE + ANTI-PICKING)
         for i, track_data in self._actor_registry["particles"].items():
             actor = track_data["actor"]
             pt_ok = track_data["pt"] >= self._current_filter_pt
             eta_ok = self._current_filter_eta_min <= track_data["eta"] <= self._current_filter_eta_max
             phi_ok = np.abs(track_data["phi"]) <= self._current_filter_phi_max
             
-            # La trace doit toujours rester visible matériellement
+            # Ensure the track remains visible
             actor.VisibilityOn()
             
             if pt_ok and eta_ok and phi_ok:
-                actor.GetProperty().SetOpacity(1.0)  # Signal d'intérêt : Pleine opacité
-                actor.SetPickable(True)             # Rendu cliquable à la souris
+                actor.GetProperty().SetOpacity(1.0)  # Signal of interest: full opacity
+                actor.SetPickable(True)             # Make pickable by mouse
             else:
-                actor.GetProperty().SetOpacity(0.03) # Bruit de fond : Mode Fantôme
-                actor.SetPickable(False)            # La souris passe au travers sans l'intercepter
+                actor.GetProperty().SetOpacity(0.03) # Background: ghost mode
+                actor.SetPickable(False)            # Mouse passes through without intercept
 
-        # 2. FILTRAGE DES CÔNES DE JETS (VUE 3D) - Conservation du masquage strict
+        # 2. Filter jet cones (3D view) - preserve strict masking
         for i, jet_data in self._actor_registry["jet_cones"].items():
             actor = jet_data["actor"]
             pt_ok = jet_data["pt"] >= self._current_filter_pt
@@ -920,7 +925,7 @@ class EventVisualizer:
             
             actor.SetVisibility(True if (pt_ok and eta_ok and phi_ok) else False)
 
-        # 3. FILTRAGE DES TOURS LEGO (VUE 2D DÉROULÉE) - Conservation du masquage strict
+        # 3. Filter lego towers (2D unfolded view) - preserve strict masking
         for i, tower_data in self._actor_registry["jet_towers"].items():
             actor = tower_data["actor"]
             pt_ok = tower_data["pt"] >= self._current_filter_pt
@@ -929,7 +934,7 @@ class EventVisualizer:
             
             actor.SetVisibility(True if (pt_ok and eta_ok and phi_ok) else False)
                 
-        # Rafraîchissement matériel des deux subplots en même temps
+        # Trigger a render to refresh both subplots at once
         if hasattr(self, "_active_plotter") and self._active_plotter:
             self._active_plotter.render()
 
@@ -937,18 +942,18 @@ class EventVisualizer:
         """Adds interactive sliders with toggle capabilities using the 'f' key."""
         import numpy as np
 
-        # Initialisation des états internes de filtrage
+        # Initialize internal filter states
         self._current_filter_pt = 0.0
         self._current_filter_eta_min = -5.0
         self._current_filter_eta_max = 5.0
         self._current_filter_phi_max = np.pi  
         self._active_plotter = plotter  
         
-        # Structure de contrôle pour le masquage
+        # Control structure for masking
         self._filter_widgets = []
         self._filters_visible = True
 
-        # Callbacks des sliders
+        # Slider callbacks
         def callback_pt(value):
             self._current_filter_pt = value
             self._apply_cinematic_filters()
@@ -961,7 +966,7 @@ class EventVisualizer:
             self._current_filter_phi_max = value
             self._apply_cinematic_filters()
 
-        # 1. Configuration et stockage du Slider pT
+        # 1. Configure and store the pT slider
         w_pt = plotter.add_slider_widget(
             callback=callback_pt, rng=[0.0, 20.0], value=0.0, title="Min pT (GeV)",
             pointa=(0.02, 0.06), pointb=(0.25, 0.06), color=self.theme["hud_text"],
@@ -969,7 +974,7 @@ class EventVisualizer:
         )
         self._filter_widgets.append(w_pt)
 
-        # 2. Configuration et stockage du Slider Eta
+        # 2. Configure and store the Eta slider
         w_eta = plotter.add_slider_widget(
             callback=callback_eta_max, rng=[0.0, 5.0], value=5.0, title="Max eta",
             pointa=(0.02, 0.18), pointb=(0.25, 0.18), color=self.theme["hud_text"],
@@ -977,7 +982,7 @@ class EventVisualizer:
         )
         self._filter_widgets.append(w_eta)
 
-        # 3. Configuration et stockage du Slider Phi
+        # 3. Configure and store the Phi slider
         w_phi = plotter.add_slider_widget(
             callback=callback_phi_max, rng=[0.0, np.pi], value=np.pi, title="Max phi (rad)",
             pointa=(0.02, 0.30), pointb=(0.25, 0.30), color=self.theme["hud_text"],
@@ -985,7 +990,7 @@ class EventVisualizer:
         )
         self._filter_widgets.append(w_phi)
 
-        # 4. Liaison de la touche "f" à notre fonction de bascule
+        # 4. Bind key 'f' to our toggle function
         plotter.add_key_event("f", self._toggle_filter_visibility)
 
     def _toggle_filter_visibility(self):
@@ -996,34 +1001,48 @@ class EventVisualizer:
         if not hasattr(self, "_active_plotter") or not self._active_plotter:
             return
 
-        # SÉCURITÉ VTK : On force le plotter à se re-concentrer sur le subplot 3D (0, 0)
-        # pour éviter le warning "no current renderer" lors de la désactivation des widgets
+        # VTK SAFETY: force the plotter to focus on the 3D subplot (0, 0)
+        # to avoid the "no current renderer" warning when disabling widgets
         try:
             self._active_plotter.subplot(0, 0)
         except Exception:
-            pass # Sécurité si l'architecture des subplots changeait à l'avenir
+            pass # Safety if subplot architecture changes in the future
 
-        # Inversion du drapeau d'état
+        # Toggle the visibility flag
         self._filters_visible = not self._filters_visible
 
-        # Application du changement d'état
+        # Apply the state change
         for widget in self._filter_widgets:
             if self._filters_visible:
                 widget.EnabledOn()  
             else:
                 widget.EnabledOff() 
 
-        # Rafraîchissement matériel immédiat
+        # Immediate render refresh
         self._active_plotter.render()
     
     def _setup_interactive_shortcuts(self, plotter):
         """Binds 'e' for screenshots and 'r' and 'h' for video recording using the export module."""
-        from . import export  # Import local pour éviter les boucles d'import
+        from . import export  # Local import to avoid circular imports
         
-        # Touche [E] pour l'image
+        # Key [E] for screenshot
         plotter.add_key_event("e", lambda: export.export_screenshot(self))
         # must pip install "pyvista[jupyter]"
         plotter.add_key_event("h", lambda: export.export_html(self))
         # must pip install imageio imageio-ffmpeg
-        # Touche [R] (comme Record) pour la vidéo
+        # Key [R] (Record) for video
         plotter.add_key_event("r", lambda: export.export_interactive_video(self, fps=30, duration_seconds=3.0))
+
+    def _validate_and_pad_theme(self, user_theme: dict) -> dict:
+        """
+        Ensures a custom user theme dict has all required keys by fallback-merging 
+        missing values with the default 'cyberpunk' blueprint.
+        """
+        # Use 'cyberpunk' as a fallback blueprint
+        base_blueprint = THEMES["cyberpunk"].copy()
+        
+        # Replace keys provided by the user
+        for key, value in user_theme.items():
+            base_blueprint[key] = value
+            
+        return base_blueprint
