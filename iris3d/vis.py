@@ -99,6 +99,8 @@ class EventVisualizer:
             "jet_towers": {},
             "met": {}
         }
+        
+        self._jet_picking_mode = False  # False = Sélection Particules, True = Sélection Jets
 
         # 4. Pipeline de géométrie
         spatial_data = self.transformer.extract_event_arrays(
@@ -192,7 +194,7 @@ class EventVisualizer:
                     # Formatage du HUD d'Analyse Relativiste
                     hud_text = (
                         f"========================================\n"
-                        f" 🔬 KINEMATIC RESONANCE ANALYSIS       \n"
+                        f" KINEMATIC RESONANCE ANALYSIS       \n"
                         f"========================================\n"
                         f" Track A : ID #{idx1} (pT={pt1:.2f} GeV, η={eta1:.2f})\n"
                         f" Track B : ID #{idx2} (pT={pt2:.2f} GeV, η={eta2:.2f})\n"
@@ -262,9 +264,69 @@ class EventVisualizer:
                 plotter.subplot(0, 0)
                 plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color=self.theme["hud_text"], name="metadata_banner")
             plotter.render()
-        # Activation globale unique
+        # --- FILTRE DE SELECTION INTERACTIF (INTERRUPTEUR) ---
+        # --- FILTRE DE SELECTION INTERACTIF (INTERRUPTEUR) ---
+        def custom_picking_filter(mesh):
+            if not mesh or "mesh_id" not in mesh.field_data:
+                return
+            
+            mesh_id = mesh.field_data["mesh_id"][0]
+            
+            # FILTRAGE LOGIQUE SELON LE MODE DE L'INTERRUPTEUR
+            if self._jet_picking_mode:
+                if mesh_id.startswith("particle_"):
+                    return
+            else:
+                if mesh_id.startswith("jet_"):
+                    return
+            
+            picking_callback(mesh)
+
+        # --- FONCTION INTERRUPTEUR DÉCLENCHÉE PAR LA TOUCHE 'C' ---
+        def toggle_picking_mode():
+            # 1. Inversion du mode (Toggle)
+            self._jet_picking_mode = not self._jet_picking_mode
+            
+            # 2. MODIFICATION PHYSIQUE DE L'INTERCEPTION VTK
+            # Si on est en mode particules (False), les cônes DOIVENT devenir transparents aux clics (Pickable=False)
+            # Si on est en mode jets (True), les cônes redeviennent interceptables (Pickable=True)
+            for jet_idx, jet_data in self._actor_registry["jet_cones"].items():
+                if "actor" in jet_data:
+                    jet_data["actor"].SetPickable(self._jet_picking_mode)
+            
+            # 3. Détermination du message du HUD selon le mode
+            if self._jet_picking_mode:
+                status_text = " MODE SELECTION ACTIVE : JETS"
+                color_hud = (255, 140, 0) # Orange pour les jets
+            else:
+                status_text = " MODE SELECTION ACTIVE : PARTICULES"
+                color_hud = self.theme["hud_text"]
+                
+            # 4. Mise à jour instantanée du texte à l'écran
+            if mode in ["both", "detector"]:
+                plotter.subplot(0, 0)
+                plotter.add_text(
+                    status_text, 
+                    position="upper_left", 
+                    font_size=11, 
+                    font="courier", 
+                    color=color_hud, 
+                    name="metadata_banner"
+                )
+            plotter.render()
+
+        # Enregistrement de l'événement clavier sur la touche 'c'
+        plotter.add_key_event("c", toggle_picking_mode)
+
+        # --- INITIALISATION DE L'ÉTAT PAR DÉFAUT DES CÔNES ---
+        # Au lancement, on force les cônes à être non-cliquables pour libérer l'accès aux traces
+        for jet_idx, jet_data in self._actor_registry["jet_cones"].items():
+            if "actor" in jet_data:
+                jet_data["actor"].SetPickable(False)
+
+        # Activation globale via notre filtre de mode
         self._setup_interactive_shortcuts(plotter)
-        plotter.enable_mesh_picking(callback=picking_callback, show=False, left_clicking=True, show_message=False)
+        plotter.enable_mesh_picking(callback=custom_picking_filter, show=False, left_clicking=True, show_message=False)
         plotter.show()
     
     def _plot_3d_detector(self, plotter, spatial_data, event=None, run_id="N/A", event_id="N/A", ctx=None, is_cinematic: bool = False, subplot_idx=(0, 0)):
