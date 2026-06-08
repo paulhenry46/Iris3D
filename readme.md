@@ -6,7 +6,7 @@
 
   <h3 align="center">Iris3D</h3>
   </div>
-Iris3D is a lightweight, high-performance Python lib built for high-energy physics (HEP) analysis. Powered by PyVista and VTK, it brings sub-atomic collision data to life inside an interactive, GPU-accelerated 3D viewport.
+Iris3D is a lightweight, high-performance Python lib built for high-energy physics  analysis. Powered by PyVista and VTK, it brings sub-atomic collision data to life inside an interactive 3D viewport.
 
 Iris3D features a **fully polymorphic ingestion engine** that natively accepts lightweight standard Python rows, columnar NumPy blocks, or heavy CERN Awkward Records from standard analysis pipelines.
 
