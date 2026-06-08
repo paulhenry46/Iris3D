@@ -265,7 +265,6 @@ class EventVisualizer:
                 plotter.add_text(hud_text, position="upper_left", font_size=11, font="courier", color=self.theme["hud_text"], name="metadata_banner")
             plotter.render()
         # --- FILTRE DE SELECTION INTERACTIF (INTERRUPTEUR) ---
-        # --- FILTRE DE SELECTION INTERACTIF (INTERRUPTEUR) ---
         def custom_picking_filter(mesh):
             if not mesh or "mesh_id" not in mesh.field_data:
                 return
@@ -890,17 +889,29 @@ class EventVisualizer:
         """
         Scans all actor registries (particles, jet cones, lego towers) and toggles 
         visibility synchronously based on current cinematic slider states.
+        Uses a non-destructive 'Ghost' mode for background particle tracks.
         """
-        # 1. FILTRAGE DES PARTICULES
+        import numpy as np
+
+        # 1. FILTRAGE DES PARTICULES (MODE GHOST)
+        # 1. FILTRAGE DES PARTICULES (MODE GHOST + ANTI-PICKING)
         for i, track_data in self._actor_registry["particles"].items():
             actor = track_data["actor"]
             pt_ok = track_data["pt"] >= self._current_filter_pt
             eta_ok = self._current_filter_eta_min <= track_data["eta"] <= self._current_filter_eta_max
             phi_ok = np.abs(track_data["phi"]) <= self._current_filter_phi_max
             
-            actor.SetVisibility(True if (pt_ok and eta_ok and phi_ok) else False)
+            # La trace doit toujours rester visible matériellement
+            actor.VisibilityOn()
+            
+            if pt_ok and eta_ok and phi_ok:
+                actor.GetProperty().SetOpacity(1.0)  # Signal d'intérêt : Pleine opacité
+                actor.SetPickable(True)             # Rendu cliquable à la souris
+            else:
+                actor.GetProperty().SetOpacity(0.03) # Bruit de fond : Mode Fantôme
+                actor.SetPickable(False)            # La souris passe au travers sans l'intercepter
 
-        # 2. FILTRAGE DES CÔNES DE JETS (VUE 3D)
+        # 2. FILTRAGE DES CÔNES DE JETS (VUE 3D) - Conservation du masquage strict
         for i, jet_data in self._actor_registry["jet_cones"].items():
             actor = jet_data["actor"]
             pt_ok = jet_data["pt"] >= self._current_filter_pt
@@ -909,7 +920,7 @@ class EventVisualizer:
             
             actor.SetVisibility(True if (pt_ok and eta_ok and phi_ok) else False)
 
-        # 3. FILTRAGE DES TOURS LEGO (VUE 2D DÉROULÉE)
+        # 3. FILTRAGE DES TOURS LEGO (VUE 2D DÉROULÉE) - Conservation du masquage strict
         for i, tower_data in self._actor_registry["jet_towers"].items():
             actor = tower_data["actor"]
             pt_ok = tower_data["pt"] >= self._current_filter_pt
@@ -921,7 +932,7 @@ class EventVisualizer:
         # Rafraîchissement matériel des deux subplots en même temps
         if hasattr(self, "_active_plotter") and self._active_plotter:
             self._active_plotter.render()
-    
+
     def _add_filter_widgets(self, plotter):
         """Adds interactive sliders with toggle capabilities using the 'f' key."""
         import numpy as np
@@ -1006,7 +1017,7 @@ class EventVisualizer:
         self._active_plotter.render()
     
     def _setup_interactive_shortcuts(self, plotter):
-        """Binds 'e' for screenshots and 'r' for video recording using the export module."""
+        """Binds 'e' for screenshots and 'r' and 'h' for video recording using the export module."""
         from . import export  # Import local pour éviter les boucles d'import
         
         # Touche [E] pour l'image
