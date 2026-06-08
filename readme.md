@@ -1,4 +1,17 @@
-# Iris3D: 3D High-Energy Physics Event Visualizer
+<br />
+<div align="center">
+  <a href="https://github.com/paulhenry46/Iris3D">
+    <img src="docs/logo.png" alt="Logo" width="90" >
+  </a>
+
+  <h3 align="center">Iris3D</h3>
+  </div>
+Iris3D is a lightweight, high-performance Python lib built for high-energy physics (HEP) analysis. Powered by PyVista and VTK, it brings sub-atomic collision data to life inside an interactive, GPU-accelerated 3D viewport.
+
+Iris3D features a **fully polymorphic ingestion engine** that natively accepts lightweight standard Python rows, columnar NumPy blocks, or heavy CERN Awkward Records from standard analysis pipelines.
+
+It models physical mechanics directly on your screen—calculating realistic track helices bending within an active magnetic field, extruding calorimeter deposits into localized 3D opening cones, and morphing real-time energy clusters into dual-screen 2D unfolded LEGO plots. It has built-in features for live kinematic resonance analysis, interactive filtering widgets, and instant single-key exports to publication-ready images, standalone interactive HTML web pages, or cinematic videos.
+
 ## Screenshot
 ### Animated mode
 ![Iris3D Animated Event Display Demo](docs/gif.gif)
@@ -6,13 +19,7 @@
 ![Iris3D Interactive Event Display Demo](docs/plot_dark.png)
 
 ![Iris3D Interactive Event Display Demo](docs/plot_light.png)
-**Iris3D** is a lightweight, high-performance Python lib built for high-energy physics (HEP) analysis. Powered by PyVista and VTK, it brings sub-atomic collision data to life inside an interactive, GPU-accelerated 3D viewport.
-
-Iris3D features a **fully polymorphic ingestion engine** that natively accepts lightweight standard Python rows, columnar NumPy blocks, or heavy CERN Awkward Records from standard analysis pipelines.
-
-It models physical mechanics directly on your screen—calculating realistic track helices bending within an active magnetic field, extruding calorimeter deposits into localized 3D opening cones, and morphing real-time energy clusters into dual-screen 2D unfolded LEGO plots. It has built-in features for live kinematic resonance analysis, interactive filtering widgets, and instant single-key exports to publication-ready images, standalone interactive HTML web pages, or cinematic videos.
-
-## Polymorphic Data Ingestion: 3 Supported Input Formats
+##  Supported Input Formats
 
 The `load_event()` ingestion pipeline is fully polymorphic. It normalizes data from three distinct data layouts into a unified internal event structure.
 
